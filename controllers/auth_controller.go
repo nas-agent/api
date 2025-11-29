@@ -53,6 +53,12 @@ func RegisterUser(c *gin.Context) {
 	// 3) Change Ownership (Critical Step)
 	// If we don't do this, root owns the folder and 'faan' cannot write to it.
 	// chown faan:faan /mnt/my_drive/faan
+	cmdChmod := exec.Command("sudo", "chmod", "700", userStoragePath)
+	if out, err := cmdChmod.CombinedOutput(); err != nil {
+		c.JSON(500, gin.H{"error": "Failed to chmod: " + string(out)})
+		return
+	}
+
 	cmdChown := exec.Command("sudo", "chown", "-R", fmt.Sprintf("%s:%s", username, username), userStoragePath)
 	if out, err := cmdChown.CombinedOutput(); err != nil {
 		c.JSON(500, gin.H{"error": "Failed to set folder ownership: " + string(out)})

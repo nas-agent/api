@@ -24,132 +24,124 @@ func RegisterUser(c *gin.Context) {
 	}
 
 	username := input.Username
-	password := "123456"
+	password := "123456" // Hardcoded for testing
 
-	// CONFIGURATION: Change this to your actual external drive mount point
+	// CONFIGURATION: Base path
 	baseStoragePath := "/mnt"
 	userStoragePath := fmt.Sprintf("%s/%s", baseStoragePath, username)
 
 	fmt.Println("------------------------------------------------")
-	fmt.Printf("Received request to register user: %s\n", username)
+	fmt.Printf("Registering User (PUBLIC MODE): %s\n", username)
 
-	// 1) Create Linux user (System User)
+	// =========================================================================
+	// 0) Open the "Hallway" (Base Path)
+	// =========================================================================
+	// chmod 777: Everyone can Read, Write, and Execute (Traverse)
+	fmt.Printf("[0/6] Setting base path '%s' to 777 (Public)...\n", baseStoragePath)
+	cmdOpenHallway := exec.Command("sudo", "chmod", "777", baseStoragePath)
+	if out, err := cmdOpenHallway.CombinedOutput(); err != nil {
+		fmt.Printf("Warning: Could not set permissions on base path: %s\n", string(out))
+	}
+
+	// =========================================================================
+	// 1) Create Linux User
+	// =========================================================================
 	fmt.Printf("[1/6] Creating Linux user '%s'...\n", username)
 	cmdAddUser := exec.Command("sudo", "useradd", "-m", "-s", "/bin/bash", username)
 	if out, err := cmdAddUser.CombinedOutput(); err != nil {
-		// Ignore "already exists" error
 		if !strings.Contains(string(out), "already exists") {
-			fmt.Printf("Error creating user: %s\n", string(out))
 			c.JSON(500, gin.H{"error": "Failed to create linux user: " + string(out)})
 			return
 		}
-		fmt.Println(" -> User already exists (skipping creation).")
-	} else {
-		fmt.Println(" -> User created successfully.")
+		fmt.Println(" -> User already exists.")
 	}
 
-	// 2) Create the Specific Storage Directory
+	// =========================================================================
+	// 2) Create the Directory
+	// =========================================================================
 	fmt.Printf("[2/6] Creating storage directory at: %s\n", userStoragePath)
 	cmdMkdir := exec.Command("sudo", "mkdir", "-p", userStoragePath)
 	if out, err := cmdMkdir.CombinedOutput(); err != nil {
-		fmt.Printf("Error mkdir: %s\n", string(out))
 		c.JSON(500, gin.H{"error": "Failed to create directory: " + string(out)})
 		return
 	}
-	fmt.Println(" -> Directory created.")
 
-	// 3) Change Ownership & Permissions
-	fmt.Println("[3/6] Setting permissions (750) and ownership...")
+	// =========================================================================
+	// 3) Set Global Permissions (777)
+	// =========================================================================
+	fmt.Println("[3/6] Setting PUBLIC permissions (777)...")
 
-	// chmod 750 (owner: rwx, group: r-x, others: none)
-	cmdChmod := exec.Command("sudo", "chmod", "750", userStoragePath)
-	if out, err := cmdChmod.CombinedOutput(); err != nil {
-		fmt.Printf("Error chmod: %s\n", string(out))
-		c.JSON(500, gin.H{"error": "Failed to chmod: " + string(out)})
-		return
-	}
-
-	// chown user:user
+	// Change Owner: We still set the user as owner for file tracking,
+	// but permissions will allow everyone else to touch it too.
 	cmdChown := exec.Command("sudo", "chown", "-R", fmt.Sprintf("%s:%s", username, username), userStoragePath)
 	if out, err := cmdChown.CombinedOutput(); err != nil {
-		fmt.Printf("Error chown: %s\n", string(out))
 		c.JSON(500, gin.H{"error": "Failed to set folder ownership: " + string(out)})
 		return
 	}
 
-	// Get the admin username
-	fmt.Println(" -> Getting admin username and adding to user group...")
-	cmdWhoami := exec.Command("whoami")
-	adminUser, err := cmdWhoami.Output()
-	if err != nil {
-		fmt.Printf("Warning: Could not get admin username: %v\n", err)
-	} else {
-		adminUsername := strings.TrimSpace(string(adminUser))
-		fmt.Printf(" -> Admin user detected: %s\n", adminUsername)
-
-		// Add admin user to the user's group
-		cmdUsermod := exec.Command("sudo", "usermod", "-a", "-G", username, adminUsername)
-		if out, err := cmdUsermod.CombinedOutput(); err != nil {
-			fmt.Printf("Warning: Could not add admin to group: %s\n", string(out))
-		} else {
-			fmt.Printf(" -> Admin user '%s' added to group '%s'\n", adminUsername, username)
-		}
+	// chmod 777:
+	// Owner: RWX (Full)
+	// Group: RWX (Full)
+	// Others: RWX (Full) <-- This allows Admin, Bob, Alice, Everyone to access.
+	cmdChmod := exec.Command("sudo", "chmod", "777", userStoragePath)
+	if out, err := cmdChmod.CombinedOutput(); err != nil {
+		c.JSON(500, gin.H{"error": "Failed to chmod: " + string(out)})
+		return
 	}
+	fmt.Println(" -> Permissions set to 777 (Everyone has access).")
 
-	fmt.Println(" -> Permissions and Ownership secured.")
-
-	// 4) Set Linux & Samba Passwords
-	fmt.Println("[4/6] Setting System and Samba passwords...")
+	// =========================================================================
+	// 4) Set Passwords
+	// =========================================================================
+	fmt.Println("[4/6] Setting passwords...")
 	if err := setPasswords(username, password); err != nil {
-		fmt.Printf("Error setting passwords: %v\n", err)
 		c.JSON(500, gin.H{"error": "Failed to set passwords"})
 		return
 	}
-	fmt.Println(" -> Passwords set.")
 
-	// 5) Append Config pointing to the NEW path
+	// =========================================================================
+	// 5) Update Samba Config (Open Access)
+	// =========================================================================
 	fmt.Println("[5/6] Updating smb.conf...")
+	// We REMOVED 'valid users'. Now anyone can connect.
+	// We ADDED 'guest ok = yes'.
+	// We set masks to 0777 so new files are created as public.
 	newShareConfig := fmt.Sprintf(`
 [%s]
    path = %s
    browseable = yes
    writeable = yes
-   valid users = %s
-   create mask = 0700
-   directory mask = 0700
-   public = no
-`, username, userStoragePath, username)
+   guest ok = yes
+   public = yes
+   create mask = 0777
+   directory mask = 0777
+`, username, userStoragePath)
 
-	// Write config
 	cmdConfig := exec.Command("bash", "-c", fmt.Sprintf("echo '%s' | sudo tee -a /etc/samba/smb.conf", newShareConfig))
 	if err := cmdConfig.Run(); err != nil {
-		fmt.Println("Error updating smb.conf")
 		c.JSON(500, gin.H{"error": "Failed to update samba config"})
 		return
 	}
-	fmt.Println(" -> Config updated.")
 
+	// =========================================================================
 	// 6) Restart Samba
-	fmt.Println("[6/6] Restarting Samba service...")
+	// =========================================================================
+	fmt.Println("[6/6] Restarting Samba...")
 	if err := exec.Command("sudo", "systemctl", "restart", "smbd").Run(); err != nil {
-		fmt.Println("Error restarting smbd service")
 		c.JSON(500, gin.H{"error": "Failed to restart samba"})
 		return
 	}
-	fmt.Println(" -> Samba restarted.")
-	fmt.Println("SUCCESS: User registration complete.")
+
+	fmt.Println("SUCCESS: User folder created (Accessible by ALL).")
 	fmt.Println("------------------------------------------------")
 
 	c.JSON(http.StatusOK, gin.H{
-		"message": "User created",
+		"message": "User created in Public Mode",
 		"path":    userStoragePath,
 	})
 }
 
-// Helper to keep main logic clean
-// Now returns error to help with logging
 func setPasswords(username, password string) error {
-	// Set Linux Pass
 	cmdLinux := exec.Command("sudo", "chpasswd")
 	stdinLinux, err := cmdLinux.StdinPipe()
 	if err != nil {
@@ -164,7 +156,6 @@ func setPasswords(username, password string) error {
 		return err
 	}
 
-	// Set Samba Pass
 	cmdSmb := exec.Command("sudo", "smbpasswd", "-a", "-s", username)
 	stdinSmb, err := cmdSmb.StdinPipe()
 	if err != nil {
@@ -173,7 +164,6 @@ func setPasswords(username, password string) error {
 	if err := cmdSmb.Start(); err != nil {
 		return err
 	}
-	// smbpasswd expects password\npassword\n
 	io.WriteString(stdinSmb, fmt.Sprintf("%s\n%s\n", password, password))
 	stdinSmb.Close()
 	if err := cmdSmb.Wait(); err != nil {

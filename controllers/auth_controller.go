@@ -59,10 +59,10 @@ func RegisterUser(c *gin.Context) {
 	fmt.Println(" -> Directory created.")
 
 	// 3) Change Ownership & Permissions
-	fmt.Println("[3/6] Setting permissions (700) and ownership...")
+	fmt.Println("[3/6] Setting permissions (750) and ownership...")
 
-	// chmod 700
-	cmdChmod := exec.Command("sudo", "chmod", "700", userStoragePath)
+	// chmod 750 (owner: rwx, group: r-x, others: none)
+	cmdChmod := exec.Command("sudo", "chmod", "750", userStoragePath)
 	if out, err := cmdChmod.CombinedOutput(); err != nil {
 		fmt.Printf("Error chmod: %s\n", string(out))
 		c.JSON(500, gin.H{"error": "Failed to chmod: " + string(out)})
@@ -76,6 +76,26 @@ func RegisterUser(c *gin.Context) {
 		c.JSON(500, gin.H{"error": "Failed to set folder ownership: " + string(out)})
 		return
 	}
+
+	// Get the admin username
+	fmt.Println(" -> Getting admin username and adding to user group...")
+	cmdWhoami := exec.Command("whoami")
+	adminUser, err := cmdWhoami.Output()
+	if err != nil {
+		fmt.Printf("Warning: Could not get admin username: %v\n", err)
+	} else {
+		adminUsername := strings.TrimSpace(string(adminUser))
+		fmt.Printf(" -> Admin user detected: %s\n", adminUsername)
+
+		// Add admin user to the user's group
+		cmdUsermod := exec.Command("sudo", "usermod", "-a", "-G", username, adminUsername)
+		if out, err := cmdUsermod.CombinedOutput(); err != nil {
+			fmt.Printf("Warning: Could not add admin to group: %s\n", string(out))
+		} else {
+			fmt.Printf(" -> Admin user '%s' added to group '%s'\n", adminUsername, username)
+		}
+	}
+
 	fmt.Println(" -> Permissions and Ownership secured.")
 
 	// 4) Set Linux & Samba Passwords

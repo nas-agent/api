@@ -14,7 +14,7 @@ func NewUserService() *UserService {
 	return &UserService{}
 }
 
-func (s *UserService) CreateUser(username, password, email string) (*entity.User, error) {
+func (s *UserService) CreateUser(username, password, email string, storageLimit, aiLimit int64) (*entity.User, error) {
 	// CONFIGURATION: Base path
 	// 	baseStoragePath := "/mnt"
 	// 	userStoragePath := fmt.Sprintf("%s/%s", baseStoragePath, username)
@@ -100,6 +100,21 @@ func (s *UserService) CreateUser(username, password, email string) (*entity.User
 
 	if err := config.DB.Create(&newUser).Error; err != nil {
 		return nil, fmt.Errorf("failed to save user to database: %v", err)
+	}
+
+	// 8) Initialize User Usage
+	fmt.Println("[8/8] Initializing User Usage...")
+	newUsage := entity.UserUsage{
+		UserID:       newUser.ID,
+		StorageUsed:  0,
+		StorageLimit: storageLimit,
+		AiUsage:      0,
+		AiLimit:      aiLimit,
+	}
+	if err := config.DB.Create(&newUsage).Error; err != nil {
+		// Log error but don't fail the whole process? Or maybe fail?
+		// For now, let's log it.
+		fmt.Printf("Warning: Failed to create UserUsage: %v\n", err)
 	}
 
 	fmt.Println("SUCCESS: User folder created and saved to DB.")

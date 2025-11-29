@@ -16,7 +16,7 @@ func RegisterUser(c *gin.Context) {
 	}
 
 	userService := services.NewUserService()
-	newUser, err := userService.CreateUser(input.Username, input.Password, input.Email)
+	newUser, err := userService.CreateUser(input.Username, input.Password, input.Email, input.StorageLimit, input.AiLimit)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return

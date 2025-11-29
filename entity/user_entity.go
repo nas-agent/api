@@ -27,7 +27,9 @@ type UserFavorite struct {
 }
 
 type CreateUserDTO struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
-	Email    string `json:"email"`
+	Username     string `json:"username"`
+	Password     string `json:"password"`
+	Email        string `json:"email"`
+	StorageLimit int64  `json:"storage_limit"`
+	AiLimit      int64  `json:"ai_limit"`
 }

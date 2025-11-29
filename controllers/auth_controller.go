@@ -24,10 +24,10 @@ func RegisterUser(c *gin.Context) {
 	}
 
 	username := input.Username
-	password := input.Password
+	password := "123456"
 
 	// CONFIGURATION: Change this to your actual external drive mount point
-	baseStoragePath := "/mnt/my_drive"
+	baseStoragePath := "/mnt"
 	userStoragePath := fmt.Sprintf("%s/%s", baseStoragePath, username)
 
 	fmt.Println("------------------------------------------------")

@@ -16,14 +16,14 @@ func RegisterUser(c *gin.Context) {
 	}
 
 	userService := services.NewUserService()
-	newUser, err := userService.CreateUser(input.Username, input.Password, input.Email, input.StorageLimit, input.AiLimit)
+	newUser, message, err := userService.CreateUser(input.Username, input.Password, input.Email, input.StorageLimit, input.AiLimit)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"message": "User created",
+		"message": message,
 		"user":    newUser,
 	})
 }

@@ -51,5 +51,13 @@ func SetupRouter() *gin.Engine {
 	r.GET("/api/dashboard/stats", controllers.GetDashboardStats)
 	r.GET("/api/dashboard/recent-activity", controllers.GetRecentActivity)
 
+	// File Operations Routes
+	r.GET("/api/files/search", controllers.SearchFiles)
+	r.GET("/api/files/recommended", controllers.GetRecommendedFolders)
+	r.GET("/api/files/recent-views", controllers.GetRecentViews)
+
+	// AI Activity Routes
+	r.GET("/api/ai/recent-moves", controllers.GetRecentAIMoves)
+
 	return r
 }

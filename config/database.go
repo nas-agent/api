@@ -27,6 +27,7 @@ func Migrate() {
 		&entity.User{},
 		&entity.UserUsage{},
 		&entity.UserFavorite{},
+		&entity.File{},
 	)
 	if err != nil {
 		log.Fatal("Failed to migrate database:", err)

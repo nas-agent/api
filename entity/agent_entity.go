@@ -8,6 +8,9 @@ type AgentModel struct {
 	Description string `json:"description"`
 }
 
+// Agent is an alias for AgentModel for backward compatibility
+type Agent = AgentModel
+
 type AgentDecision struct {
 	gorm.Model
 	FileName        string `json:"file_name"`

@@ -47,5 +47,9 @@ func SetupRouter() *gin.Engine {
 	r.PUT("/users/:id", controllers.UpdateUser)
 	r.DELETE("/users/:id", controllers.DeleteUser)
 
+	// Dashboard Routes
+	r.GET("/api/dashboard/stats", controllers.GetDashboardStats)
+	r.GET("/api/dashboard/recent-activity", controllers.GetRecentActivity)
+
 	return r
 }

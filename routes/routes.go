@@ -59,5 +59,8 @@ func SetupRouter() *gin.Engine {
 	// AI Activity Routes
 	r.GET("/api/ai/recent-moves", controllers.GetRecentAIMoves)
 
+	// Storage Routes (Real Linux monitoring)
+	r.GET("/api/storage/devices", controllers.GetStorageDevices)
+
 	return r
 }

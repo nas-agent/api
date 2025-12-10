@@ -106,8 +106,8 @@ func getDirSize(path string) (int64, error) {
 	return size, err
 }
 
-// GetRecentActivity - GET /api/dashboard/recent-activity
-func GetRecentActivity(c *gin.Context) {
+// GetDashboardRecentActivity - GET /api/dashboard/recent-activity
+func GetDashboardRecentActivity(c *gin.Context) {
 	db := config.DB
 
 	var activities []RecentActivity

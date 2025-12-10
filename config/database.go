@@ -28,6 +28,10 @@ func Migrate() {
 		&entity.UserUsage{},
 		&entity.UserFavorite{},
 		&entity.File{},
+		&entity.AIConfig{},
+		&entity.AILimit{},
+		&entity.GlobalAIConfig{},
+		&entity.UserActivity{},
 	)
 	if err != nil {
 		log.Fatal("Failed to migrate database:", err)

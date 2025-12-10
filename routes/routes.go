@@ -49,15 +49,35 @@ func SetupRouter() *gin.Engine {
 
 	// Dashboard Routes
 	r.GET("/api/dashboard/stats", controllers.GetDashboardStats)
-	r.GET("/api/dashboard/recent-activity", controllers.GetRecentActivity)
+	r.GET("/api/dashboard/recent-activity", controllers.GetDashboardRecentActivity)
 
 	// File Operations Routes
 	r.GET("/api/files/search", controllers.SearchFiles)
-	r.GET("/api/files/recommended", controllers.GetRecommendedFolders)
-	r.GET("/api/files/recent-views", controllers.GetRecentViews)
+	r.GET("/api/files/recommended", controllers.GetRecommendedFoldersFromActivity) // Updated
+	r.GET("/api/files/recent-views", controllers.GetRecentFileViews)               // Updated
 
 	// AI Activity Routes
 	r.GET("/api/ai/recent-moves", controllers.GetRecentAIMoves)
+
+	// AI Configuration Routes
+	r.GET("/api/settings/autosort", controllers.GetSharedAIConfig)
+	r.POST("/api/settings/autosort", controllers.UpdateSharedAIConfig)
+	r.GET("/api/settings/autosort/users", controllers.GetUserAIConfigs)
+	r.POST("/api/settings/autosort/users/:userId", controllers.UpdateUserAIConfig)
+	r.POST("/api/autosort/send", controllers.SyncAIConfig)
+
+	// AI Limits Routes
+	r.GET("/api/ai/limits/users", controllers.GetUserLimits)
+	r.PUT("/api/ai/limits/users/:id", controllers.UpdateUserLimit)
+	r.GET("/api/ai/limits/folders", controllers.GetFolderLimits)
+	r.PUT("/api/ai/limits/folders/:id", controllers.UpdateFolderLimit)
+	r.GET("/api/ai/limits/global", controllers.GetGlobalAIConfig)
+	r.PUT("/api/ai/limits/global", controllers.UpdateGlobalAIConfig)
+	r.POST("/api/ai/limits/reset-daily", controllers.ResetDailyCounters)
+
+	// Activity Routes
+	r.GET("/api/activity/recent", controllers.GetRecentActivity)
+	r.POST("/api/activity/track", controllers.TrackActivity)
 
 	// Storage Routes (Real Linux monitoring)
 	r.GET("/api/storage/devices", controllers.GetStorageDevices)

@@ -1,0 +1,12 @@
+package models
+
+type UserAIConfig struct {
+	ID               uint    `gorm:"primaryKey" json:"id"`
+	UserID           uint    `gorm:"uniqueIndex;not null" json:"user_id"`
+	ConfidenceAuto   float64 `gorm:"default:0.8" json:"confidence_auto"`
+	ConfidenceReject float64 `gorm:"default:0.4" json:"confidence_reject"`
+	OriginPath       string  `gorm:"not null" json:"origin_path"`
+	DestinationPath  string  `gorm:"not null" json:"destination_path"`
+	RenameFile       bool    `gorm:"default:false" json:"rename_file"`
+	AutoSelectFolder bool    `gorm:"default:false" json:"auto_select_folder"`
+}

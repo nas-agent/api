@@ -1,37 +1,38 @@
 package main
 
 import (
-	"api/config"
+	"api/database"
 	"api/routes"
 	"api/services"
 	"log"
+
+	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/cors"
 )
 
 func main() {
-	config.ConnectDatabase()
-	config.Migrate()
+	// Initialize Database Connection and Auto-Migrate
+	database.ConnectDB()
 
-	r := routes.SetupRouter()
+	// Initialize File Watcher Service
+	services.InitFileWatcher()
 
-	// Start File Watcher
-	go func() {
-		watcherService, err := services.NewWatcherService()
-		if err != nil {
-			log.Panic(err)
-		}
+	// Initialize Fiber App
+	app := fiber.New()
 
-		// Configuration
-		watchDir := "./downloads"
+	// Middleware
+	app.Use(cors.New(cors.Config{
+		AllowOrigins:     "*", // Frontend Dev Server Route
+		AllowHeaders:     "Origin, Content-Type, Accept, Authorization",
+		AllowCredentials: false,
+	}))
 
-		// UPDATED: Pointing to localhost:8000
-		// I added "/upload" to the path, as APIs usually have an endpoint.
-		// If your API accepts it at the root, remove "/upload".
-		apiURL := "http://localhost:8000/upload"
+	// Serve uploaded files statically
+	app.Static("/uploads", "./data/uploads")
 
-		log.Printf("Starting watcher on %s sending to %s", watchDir, apiURL)
-		watcherService.StartWatcher(watchDir, apiURL)
-	}()
+	// Setup Routes
+	routes.SetupSetup(app)
 
-	r.Run("0.0.0.0:8080")
-	// r.Run(":8080")
+	// Start Server
+	log.Fatal(app.Listen(":3000"))
 }

@@ -30,4 +30,7 @@ func SetupSetup(app *fiber.App) {
 	// Monitors
 	ai.Get("/monitors", controllers.GetMonitors)
 	ai.Post("/monitors/toggle", controllers.ToggleMonitor)
+
+	// Search
+	api.Post("/search/semantic", controllers.SemanticSearch)
 }

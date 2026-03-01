@@ -20,16 +20,18 @@ import (
 
 // AITriggerPayload represents the JSON payload sent to the Python AI node
 type AITriggerPayload struct {
-	FileID   uint   `json:"file_id"`
-	FilePath string `json:"file_path"`
-	FileName string `json:"file_name"`
-	UserID   uint   `json:"user_id"`
+	FileID          uint     `json:"file_id"`
+	FilePath        string   `json:"file_path"`
+	FileName        string   `json:"file_name"`
+	UserID          uint     `json:"user_id"`
+	ExistingFolders []string `json:"existing_folders"`
 }
 
 type AIAnalysisResponse struct {
-	SuggestedFolder string   `json:"suggested_folder"`
-	Tags            []string `json:"tags"`
-	ConfidenceScore int      `json:"confidence_score"`
+	SuggestedFolder string    `json:"suggested_folder"`
+	Tags            []string  `json:"tags"`
+	ConfidenceScore int       `json:"confidence_score"`
+	Embedding       []float32 `json:"embedding"`
 }
 
 var (
@@ -155,8 +157,23 @@ func processNewFile(sourcePath, fileName string, userID uint, config models.User
 	database.DB.Create(&metadata)
 	log.Printf("Saved initial metadata for: %s (ID: %d)", fileName, metadata.ID)
 
+	// Scan Existing Folders
+	var existingFolders []string
+	if config.DestinationPath != "" {
+		entries, err := os.ReadDir(config.DestinationPath)
+		if err == nil {
+			for _, entry := range entries {
+				if entry.IsDir() {
+					existingFolders = append(existingFolders, entry.Name())
+				}
+			}
+		} else {
+			log.Printf("Warning: Failed to scan DestinationPath: %v", err)
+		}
+	}
+
 	// Trigger Python & Wait for Response
-	aiResp, err := triggerAIAnalysis(metadata.ID, sourcePath, fileName, userID)
+	aiResp, err := triggerAIAnalysis(metadata.ID, sourcePath, fileName, userID, existingFolders)
 	if err != nil {
 		log.Printf("AI Analysis failed for %s: %v. File will remain in origin.", fileName, err)
 		return
@@ -193,15 +210,31 @@ func processNewFile(sourcePath, fileName string, userID uint, config models.User
 			}
 			database.DB.Create(&tag)
 		}
+
+		// Save Embedding Vector
+		if len(aiResp.Embedding) > 0 {
+			vectorBytes, err := json.Marshal(aiResp.Embedding)
+			if err == nil {
+				embeddingDoc := models.FileEmbedding{
+					FileID:          metadata.ID,
+					EmbeddingVector: string(vectorBytes),
+				}
+				database.DB.Create(&embeddingDoc)
+				log.Printf("Saved vector embedding for %s (%d dims)", fileName, len(aiResp.Embedding))
+			} else {
+				log.Printf("Failed to marshal embeddings for %s: %v", fileName, err)
+			}
+		}
 	}
 }
 
-func triggerAIAnalysis(fileID uint, filePath string, fileName string, userID uint) (*AIAnalysisResponse, error) {
+func triggerAIAnalysis(fileID uint, filePath string, fileName string, userID uint, existingFolders []string) (*AIAnalysisResponse, error) {
 	payload := AITriggerPayload{
-		FileID:   fileID,
-		FilePath: filePath,
-		FileName: fileName,
-		UserID:   userID,
+		FileID:          fileID,
+		FilePath:        filePath,
+		FileName:        fileName,
+		UserID:          userID,
+		ExistingFolders: existingFolders,
 	}
 
 	jsonData, _ := json.Marshal(payload)

@@ -2,25 +2,73 @@ package routes
 
 import (
 	"api/controllers"
+	"api/services"
+
+	"os"
+	"strings"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/golang-jwt/jwt/v5"
 )
+
+func JWTMiddleware() fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		authHeader := c.Get("Authorization")
+		if authHeader == "" {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"message": "Missing token"})
+		}
+
+		tokenString := strings.Split(authHeader, "Bearer ")
+		if len(tokenString) < 2 {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"message": "Invalid token format"})
+		}
+
+		secret := os.Getenv("JWT_SECRET")
+		if secret == "" {
+			secret = "fallback_secret_for_local_dev"
+		}
+
+		token, err := jwt.Parse(tokenString[1], func(token *jwt.Token) (interface{}, error) {
+			return []byte(secret), nil
+		})
+
+		if err != nil || !token.Valid {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"message": "Invalid or expired token"})
+		}
+
+		c.Locals("user", token)
+		return c.Next()
+	}
+}
 
 func SetupSetup(app *fiber.App) {
 	api := app.Group("/api")
 
-	// Users
+	api.Get("/health", func(c *fiber.Ctx) error {
+		return c.JSON(fiber.Map{
+			"status": "ok",
+			"server": "go-fiber",
+		})
+	})
+
+	// Public Users
 	api.Post("/users/register", controllers.Register)
 	api.Post("/users/login", controllers.Login)
 
+	// Protected Routes
+	protected := api.Group("/", JWTMiddleware())
+	protected.Post("/users/change-password", controllers.ChangePassword)
+	protected.Get("/users/profile", controllers.GetProfile)
+
 	// Settings
-	api.Get("/settings", controllers.GetSettings)
-	api.Put("/settings", controllers.UpdateSettings)
+	protected.Get("/settings", controllers.GetSettings)
+	protected.Put("/settings", controllers.UpdateSettings)
 
 	// AI config
-	ai := api.Group("/ai")
+	ai := protected.Group("/ai")
 	ai.Get("/config", controllers.GetAIConfig)
 	ai.Put("/config", controllers.UpdateAIConfig)
+	ai.Get("/notifications", services.PollNotifications)
 
 	// AI history
 	ai.Get("/history", controllers.GetHistory)
@@ -32,5 +80,5 @@ func SetupSetup(app *fiber.App) {
 	ai.Post("/monitors/toggle", controllers.ToggleMonitor)
 
 	// Search
-	api.Post("/search/semantic", controllers.SemanticSearch)
+	protected.Post("/search/semantic", controllers.SemanticSearch)
 }

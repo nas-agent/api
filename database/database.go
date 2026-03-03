@@ -46,6 +46,44 @@ func ConnectDB() {
 }
 
 func seedData() {
-	// For now, seed data logic is disabled because
-	// settings are tied to a UserID
+	var user models.User
+	result := DB.First(&user)
+	if result.Error != nil {
+		// No users found, create a default one
+		user = models.User{
+			Username: "faan2",
+			Email:    "faan2@example.com",
+			Password: "password", // This should be hashed in production
+		}
+		DB.Create(&user)
+		log.Println("Seeded default user: faan2")
+	}
+
+	// Ensure AI Config exists
+	var aiConfig models.UserAIConfig
+	if err := DB.Where("user_id = ?", user.ID).First(&aiConfig).Error; err != nil {
+		aiConfig = models.UserAIConfig{
+			UserID:          user.ID,
+			OriginPath:      "C:/Users/rudfa/Downloads",
+			DestinationPath: "C:/Users/rudfa/Documents/NAS",
+			RenameFile:      true,
+			RenameFormat:    "opt1",
+		}
+		DB.Create(&aiConfig)
+		log.Println("Seeded default AI config for user", user.ID)
+	}
+
+	// Ensure Settings exist
+	var settings models.UserSetting
+	if err := DB.Where("user_id = ?", user.ID).First(&settings).Error; err != nil {
+		settings = models.UserSetting{
+			UserID:          user.ID,
+			Language:        "th",
+			Theme:           "dark",
+			LaunchOnStartup: false,
+			AINotifications: true,
+		}
+		DB.Create(&settings)
+		log.Println("Seeded default settings for user", user.ID)
+	}
 }

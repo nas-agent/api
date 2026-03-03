@@ -81,9 +81,10 @@ func SemanticSearch(c *fiber.Ctx) error {
 	}
 
 	// 2. Fetch all files from DB with their Embeddings and Tags
+	userID := GetUserID(c)
 	var allFiles []models.FileMetadata
-	// For production we would filter by Date/User directly in the DB query to save memory
-	database.DB.Preload("Embeddings").Preload("Tags").Find(&allFiles)
+	// Filter by Date and User directly in the DB query
+	database.DB.Where("user_id = ?", userID).Preload("Embeddings").Preload("Tags").Find(&allFiles)
 
 	var searchResults []SearchResult
 

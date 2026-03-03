@@ -11,6 +11,20 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+// GetUserID extracts user_id from JWT claims in the context
+func GetUserID(c *fiber.Ctx) uint {
+	user := c.Locals("user")
+	if user == nil {
+		// For demo/dev if middleware not fully enforced, try parsing manually or skip
+		// In a real app, middleware would set this.
+		return 0
+	}
+	token := user.(*jwt.Token)
+	claims := token.Claims.(jwt.MapClaims)
+	userID := uint(claims["user_id"].(float64))
+	return userID
+}
+
 // Register a new user
 func Register(c *fiber.Ctx) error {
 	var data map[string]string
@@ -86,8 +100,64 @@ func Login(c *fiber.Ctx) error {
 		"message": "Success",
 		"token":   t,
 		"user": fiber.Map{
-			"id":       user.ID,
-			"username": user.Username,
+			"id":           user.ID,
+			"username":     user.Username,
+			"email":        user.Email,
+			"created_date": user.CreatedAt,
 		},
+	})
+}
+
+// ChangePassword updates the user's password
+func ChangePassword(c *fiber.Ctx) error {
+	var data map[string]string
+
+	if err := c.BodyParser(&data); err != nil {
+		return err
+	}
+
+	// Identify current user via JWT
+	userID := GetUserID(c)
+	if userID == 0 {
+		return c.Status(401).JSON(fiber.Map{"message": "Unauthorized"})
+	}
+
+	var user models.User
+	if err := database.DB.First(&user, userID).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"message": "User not found"})
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(data["old_password"])); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"message": "Incorrect old password",
+		})
+	}
+
+	newHashedPassword, _ := bcrypt.GenerateFromPassword([]byte(data["new_password"]), 14)
+	user.Password = string(newHashedPassword)
+	database.DB.Save(&user)
+
+	return c.JSON(fiber.Map{
+		"message": "Password updated successfully",
+	})
+}
+
+// GetProfile returns the current logged-in user profile
+func GetProfile(c *fiber.Ctx) error {
+	userID := GetUserID(c)
+	if userID == 0 {
+		return c.Status(401).JSON(fiber.Map{"message": "Unauthorized"})
+	}
+
+	var user models.User
+	if err := database.DB.Where("id = ?", userID).First(&user).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"message": "User not found"})
+	}
+
+	return c.JSON(fiber.Map{
+		"id":           user.ID,
+		"username":     user.Username,
+		"email":        user.Email,
+		"created_date": user.CreatedAt,
 	})
 }

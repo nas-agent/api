@@ -8,5 +8,7 @@ type UserAIConfig struct {
 	OriginPath       string  `gorm:"not null" json:"origin_path"`
 	DestinationPath  string  `gorm:"not null" json:"destination_path"`
 	RenameFile       bool    `gorm:"default:false" json:"rename_file"`
+	RenameFormat     string  `gorm:"default:'opt1'" json:"rename_format"`
 	AutoSelectFolder bool    `gorm:"default:false" json:"auto_select_folder"`
+	Active           bool    `gorm:"default:false" json:"active"`
 }

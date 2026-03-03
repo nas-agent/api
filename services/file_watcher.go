@@ -70,7 +70,7 @@ func RefreshFileWatcher() {
 	done = make(chan bool)
 
 	for _, config := range configs {
-		if config.OriginPath != "" {
+		if config.OriginPath != "" && config.Active {
 			// Ensure path exists
 			os.MkdirAll(config.OriginPath, os.ModePerm)
 
@@ -158,7 +158,7 @@ func processNewFile(sourcePath, fileName string, userID uint, config models.User
 	log.Printf("Saved initial metadata for: %s (ID: %d)", fileName, metadata.ID)
 
 	// Scan Existing Folders
-	var existingFolders []string
+	existingFolders := []string{}
 	if config.DestinationPath != "" {
 		entries, err := os.ReadDir(config.DestinationPath)
 		if err == nil {
@@ -173,16 +173,51 @@ func processNewFile(sourcePath, fileName string, userID uint, config models.User
 	}
 
 	// Trigger Python & Wait for Response
+	startTime := time.Now()
 	aiResp, err := triggerAIAnalysis(metadata.ID, sourcePath, fileName, userID, existingFolders)
+	duration := time.Since(startTime)
 	if err != nil {
 		log.Printf("AI Analysis failed for %s: %v. File will remain in origin.", fileName, err)
 		return
 	}
+	log.Printf("!!! TOTAL AI TURNAROUND TIME for %s: %v !!!", fileName, duration)
 
-	// Move the file based on AI suggestion
+	// Move the file based on AI suggestion and confidence thresholds
 	finalPath := sourcePath
+
+	// Convert thresholds to scale of 0-100 for comparison with AI response
+	autoThreshold := config.ConfidenceAuto
+	rejectThreshold := config.ConfidenceReject
+
+	// If the DB stores them as 0.0-1.0, and AI returns 0-100, normalize autoThreshold and rejectThreshold
+	if autoThreshold <= 1.0 && aiResp.ConfidenceScore > 1 {
+		autoThreshold *= 100
+	}
+	if rejectThreshold <= 1.0 && aiResp.ConfidenceScore > 1 {
+		rejectThreshold *= 100
+	}
+
+	log.Printf("Analyzing movement for %s: Confidence=%d, Auto=%f, Reject=%f",
+		fileName, aiResp.ConfidenceScore, autoThreshold, rejectThreshold)
+
+	// Prepare Log Entry (Always log what AI thought)
+	logEntry := models.AIActionLog{
+		UserID:   userID,
+		Filename: fileName,
+		Folder:   aiResp.SuggestedFolder,
+	}
+
+	if float64(aiResp.ConfidenceScore) <= rejectThreshold {
+		log.Printf("Confidence too low (%d <= %f). File will remain in origin.", aiResp.ConfidenceScore, rejectThreshold)
+		logEntry.Action = "reject"
+		logEntry.Description = fmt.Sprintf("Rejected (Low Confidence: %d%%)", aiResp.ConfidenceScore)
+		logEntry.IsMove = false
+		database.DB.Create(&logEntry)
+		return
+	}
+
 	if config.DestinationPath != "" && config.AutoSelectFolder {
-		// Append AI suggested folder
+		// Proceed with move
 		targetDir := filepath.Join(config.DestinationPath, aiResp.SuggestedFolder)
 		os.MkdirAll(targetDir, os.ModePerm)
 
@@ -196,34 +231,52 @@ func processNewFile(sourcePath, fileName string, userID uint, config models.User
 
 		os.Remove(sourcePath)
 		finalPath = destPath
-		log.Printf("Categorized and moved file to: %s", finalPath)
+		log.Printf("Categorized and moved file to: %s (Confidence: %d)", finalPath, aiResp.ConfidenceScore)
+
+		// TRIGGER NOTIFICATION if confidence is between thresholds
+		if float64(aiResp.ConfidenceScore) < autoThreshold {
+			log.Printf("Confidence in notification range (%f < %d < %f). Triggering SSE.",
+				rejectThreshold, aiResp.ConfidenceScore, autoThreshold)
+			NotifyFileMoved(fileName, aiResp.SuggestedFolder)
+		}
+
+		logEntry.Action = "move_file"
+		logEntry.Description = fmt.Sprintf("Auto-organized into '%s' (Confidence: %d%%)", aiResp.SuggestedFolder, aiResp.ConfidenceScore)
+		logEntry.IsMove = true
+		database.DB.Create(&logEntry)
 
 		// Update Metadata with final path
 		metadata.NASPath = finalPath
 		database.DB.Save(&metadata)
+	} else {
+		// Just log the suggestion without moving
+		log.Printf("Auto-move disabled or no destination. Logging suggestion only.")
+		logEntry.Action = "suggestion"
+		logEntry.Description = fmt.Sprintf("Suggested '%s' (Manual Mode)", aiResp.SuggestedFolder)
+		logEntry.IsMove = false
+		database.DB.Create(&logEntry)
+	}
 
-		// Create Tags in DB
-		for _, tagStr := range aiResp.Tags {
-			tag := models.FileTag{
-				FileID:  metadata.ID,
-				TagName: tagStr,
-			}
-			database.DB.Create(&tag)
+	// Create Tags in DB (Always save tags even if not moved)
+	for _, tagStr := range aiResp.Tags {
+		tag := models.FileTag{
+			FileID:  metadata.ID,
+			TagName: tagStr,
 		}
-
-		// Save Embedding Vector
-		if len(aiResp.Embedding) > 0 {
-			vectorBytes, err := json.Marshal(aiResp.Embedding)
-			if err == nil {
-				embeddingDoc := models.FileEmbedding{
-					FileID:          metadata.ID,
-					EmbeddingVector: string(vectorBytes),
-				}
-				database.DB.Create(&embeddingDoc)
-				log.Printf("Saved vector embedding for %s (%d dims)", fileName, len(aiResp.Embedding))
-			} else {
-				log.Printf("Failed to marshal embeddings for %s: %v", fileName, err)
+		database.DB.Create(&tag)
+	}
+	// Save Embedding Vector
+	if len(aiResp.Embedding) > 0 {
+		vectorBytes, err := json.Marshal(aiResp.Embedding)
+		if err == nil {
+			embeddingDoc := models.FileEmbedding{
+				FileID:          metadata.ID,
+				EmbeddingVector: string(vectorBytes),
 			}
+			database.DB.Create(&embeddingDoc)
+			log.Printf("Saved vector embedding for %s (%d dims)", fileName, len(aiResp.Embedding))
+		} else {
+			log.Printf("Failed to marshal embeddings for %s: %v", fileName, err)
 		}
 	}
 }

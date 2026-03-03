@@ -12,15 +12,18 @@ import (
 // --- Settings ---
 
 func GetSettings(c *fiber.Ctx) error {
+	userID := GetUserID(c)
 	var setting models.UserSetting
-	// Since there's one global setting in this demo, just get the first one
-	database.DB.First(&setting)
+	// Use Limit(1).Find to avoid First()'s automatic "record not found" log
+	database.DB.Where("user_id = ?", userID).Limit(1).Find(&setting)
 	return c.JSON(setting)
 }
 
 func UpdateSettings(c *fiber.Ctx) error {
+	userID := GetUserID(c)
 	var setting models.UserSetting
-	database.DB.First(&setting)
+	database.DB.Where("user_id = ?", userID).First(&setting)
+	setting.UserID = userID // Ensure owner remains correct
 
 	if err := c.BodyParser(&setting); err != nil {
 		return c.Status(400).JSON(err.Error())
@@ -33,14 +36,17 @@ func UpdateSettings(c *fiber.Ctx) error {
 // --- AI Config ---
 
 func GetAIConfig(c *fiber.Ctx) error {
+	userID := GetUserID(c)
 	var config models.UserAIConfig
-	database.DB.First(&config)
+	database.DB.Where("user_id = ?", userID).Limit(1).Find(&config)
 	return c.JSON(config)
 }
 
 func UpdateAIConfig(c *fiber.Ctx) error {
+	userID := GetUserID(c)
 	var config models.UserAIConfig
-	database.DB.First(&config)
+	database.DB.Where("user_id = ?", userID).First(&config)
+	config.UserID = userID
 
 	if err := c.BodyParser(&config); err != nil {
 		return c.Status(400).JSON(err.Error())

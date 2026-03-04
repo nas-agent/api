@@ -84,7 +84,7 @@ func SemanticSearch(c *fiber.Ctx) error {
 	userID := GetUserID(c)
 	var allFiles []models.FileMetadata
 	// Filter by Date and User directly in the DB query
-	database.DB.Where("user_id = ?", userID).Preload("Embeddings").Preload("Tags").Find(&allFiles)
+	database.DB.Where("owner_id = ?", userID).Preload("Embeddings").Preload("Tags").Find(&allFiles)
 
 	var searchResults []SearchResult
 

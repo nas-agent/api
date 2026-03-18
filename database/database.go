@@ -63,11 +63,13 @@ func seedData() {
 	var aiConfig models.UserAIConfig
 	if err := DB.Where("user_id = ?", user.ID).First(&aiConfig).Error; err != nil {
 		aiConfig = models.UserAIConfig{
-			UserID:          user.ID,
-			OriginPath:      "C:/Users/rudfa/Downloads",
-			DestinationPath: "C:/Users/rudfa/Documents/NAS",
-			RenameFile:      true,
-			RenameFormat:    "opt1",
+			UserID:           user.ID,
+			OriginPath:       "C:/Users/rudfa/Downloads",
+			DestinationPath:  "C:/Users/rudfa/Documents/NAS",
+			RenameFile:       true,
+			RenameFormat:     "opt1",
+			AnalysisProvider: "local",
+			GeminiModel:      "gemini-2.0-flash",
 		}
 		DB.Create(&aiConfig)
 		log.Println("Seeded default AI config for user", user.ID)

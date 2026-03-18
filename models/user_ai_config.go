@@ -11,4 +11,7 @@ type UserAIConfig struct {
 	RenameFormat     string  `gorm:"default:'opt1'" json:"rename_format"`
 	AutoSelectFolder bool    `gorm:"default:false" json:"auto_select_folder"`
 	Active           bool    `gorm:"default:false" json:"active"`
+	AnalysisProvider string  `gorm:"default:'local'" json:"analysis_provider"`
+	GeminiAPIKey     string  `gorm:"type:text" json:"gemini_api_key"`
+	GeminiModel      string  `gorm:"default:'gemini-2.0-flash'" json:"gemini_model"`
 }

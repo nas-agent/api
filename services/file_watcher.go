@@ -2,6 +2,7 @@ package services
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -20,11 +21,16 @@ import (
 
 // AITriggerPayload represents the JSON payload sent to the Python AI node
 type AITriggerPayload struct {
-	FileID          uint     `json:"file_id"`
-	FilePath        string   `json:"file_path"`
-	FileName        string   `json:"file_name"`
-	UserID          uint     `json:"user_id"`
-	ExistingFolders []string `json:"existing_folders"`
+	FileID            uint     `json:"file_id"`
+	FilePath          string   `json:"file_path"`
+	FileName          string   `json:"file_name"`
+	UserID            uint     `json:"user_id"`
+	ExistingFolders   []string `json:"existing_folders"`
+	AnalysisProvider  string   `json:"analysis_provider"`
+	GeminiAPIKey      string   `json:"gemini_api_key"`
+	GeminiModel       string   `json:"gemini_model"`
+	FileContentBase64 string   `json:"file_content_base64,omitempty"`
+	MimeType          string   `json:"mime_type,omitempty"`
 }
 
 type AIAnalysisResponse struct {
@@ -175,7 +181,7 @@ func processNewFile(sourcePath, fileName string, userID uint, config models.User
 
 	// Trigger Python & Wait for Response
 	startTime := time.Now()
-	aiResp, err := triggerAIAnalysis(metadata.ID, sourcePath, fileName, userID, existingFolders)
+	aiResp, err := triggerAIAnalysis(metadata.ID, sourcePath, fileName, userID, existingFolders, config)
 	duration := time.Since(startTime)
 	if err != nil {
 		log.Printf("AI Analysis failed for %s: %v. File will remain in origin.", fileName, err)
@@ -289,13 +295,30 @@ func processNewFile(sourcePath, fileName string, userID uint, config models.User
 	}
 }
 
-func triggerAIAnalysis(fileID uint, filePath string, fileName string, userID uint, existingFolders []string) (*AIAnalysisResponse, error) {
+func triggerAIAnalysis(fileID uint, filePath string, fileName string, userID uint, existingFolders []string, config models.UserAIConfig) (*AIAnalysisResponse, error) {
+	provider := strings.ToLower(strings.TrimSpace(config.AnalysisProvider))
+	if provider == "" {
+		provider = "local"
+	}
+
 	payload := AITriggerPayload{
-		FileID:          fileID,
-		FilePath:        filePath,
-		FileName:        fileName,
-		UserID:          userID,
-		ExistingFolders: existingFolders,
+		FileID:           fileID,
+		FilePath:         filePath,
+		FileName:         fileName,
+		UserID:           userID,
+		ExistingFolders:  existingFolders,
+		AnalysisProvider: provider,
+		GeminiAPIKey:     config.GeminiAPIKey,
+		GeminiModel:      config.GeminiModel,
+	}
+
+	if provider == "gemini" {
+		fileBytes, err := os.ReadFile(filePath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read file for Gemini payload: %v", err)
+		}
+		payload.FileContentBase64 = base64.StdEncoding.EncodeToString(fileBytes)
+		payload.MimeType = detectMimeType(fileName)
 	}
 
 	jsonData, _ := json.Marshal(payload)
@@ -319,6 +342,37 @@ func triggerAIAnalysis(fileID uint, filePath string, fileName string, userID uin
 
 	log.Printf("AI analysis logic complete for %s. Suggested folder: %s", fileName, aiResponse.SuggestedFolder)
 	return &aiResponse, nil
+}
+
+func detectMimeType(fileName string) string {
+	switch strings.ToLower(filepath.Ext(fileName)) {
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".png":
+		return "image/png"
+	case ".gif":
+		return "image/gif"
+	case ".webp":
+		return "image/webp"
+	case ".bmp":
+		return "image/bmp"
+	case ".pdf":
+		return "application/pdf"
+	case ".txt":
+		return "text/plain"
+	case ".md":
+		return "text/markdown"
+	case ".csv":
+		return "text/csv"
+	case ".docx":
+		return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+	case ".pptx":
+		return "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+	case ".xlsx":
+		return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+	default:
+		return "application/octet-stream"
+	}
 }
 
 func copyFile(src, dst string) error {

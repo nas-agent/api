@@ -80,5 +80,6 @@ func SetupSetup(app *fiber.App) {
 	ai.Post("/monitors/toggle", controllers.ToggleMonitor)
 
 	// Search
+	protected.Get("/dashboard/summary", controllers.GetDashboardSummary)
 	protected.Post("/search/semantic", controllers.SemanticSearch)
 }

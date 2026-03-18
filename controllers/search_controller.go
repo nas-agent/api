@@ -8,7 +8,9 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"regexp"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -18,18 +20,181 @@ type SemanticSearchRequest struct {
 	Query string `json:"query"`
 }
 
+type QueryEntities struct {
+	SubjectNames      []string `json:"subject_names"`
+	CourseNames       []string `json:"course_names"`
+	OrganizationNames []string `json:"organization_names"`
+	DatePhrases       []string `json:"date_phrases"`
+	ExtraKeywords     []string `json:"extra_keywords"`
+}
+
 type PythonSearchResponse struct {
-	SemanticIntent string    `json:"semantic_intent"`
-	FileType       *string   `json:"file_type"`
-	Tags           []string  `json:"tags"`
-	StartDate      *string   `json:"start_date"`
-	EndDate        *string   `json:"end_date"`
-	SearchVector   []float64 `json:"search_vector"`
+	SemanticIntent string        `json:"semantic_intent"`
+	FileType       *string       `json:"file_type"`
+	Tags           []string      `json:"tags"`
+	StartDate      *string       `json:"start_date"`
+	EndDate        *string       `json:"end_date"`
+	Entities       QueryEntities `json:"entities"`
+	SearchVector   []float64     `json:"search_vector"`
 }
 
 type SearchResult struct {
 	File            models.FileMetadata `json:"file"`
 	SimilarityScore float64             `json:"similarity_score"`
+}
+
+var tokenPattern = regexp.MustCompile(`[\p{L}\p{N}]+`)
+
+func normalizeTerm(value string) string {
+	return strings.TrimSpace(strings.ToLower(value))
+}
+
+func normalizeFileType(fileType string) string {
+	v := strings.TrimPrefix(normalizeTerm(fileType), ".")
+	switch v {
+	case "jpg", "jpeg", "png", "gif", "webp", "bmp", "svg", "heic", "tiff":
+		return "image"
+	case "doc", "docx", "odt", "rtf", "document":
+		return "document"
+	case "xls", "xlsx", "csv", "ods", "spreadsheet":
+		return "spreadsheet"
+	case "ppt", "pptx", "odp", "presentation":
+		return "presentation"
+	case "py", "go", "js", "jsx", "ts", "tsx", "java", "c", "cpp", "cs", "rb", "php", "rs", "swift", "kt", "kts", "scala", "sql", "html", "css", "json", "yaml", "yml", "xml", "code":
+		return "code"
+	case "txt", "md", "log", "text":
+		return "txt"
+	case "pdf":
+		return "pdf"
+	default:
+		return v
+	}
+}
+
+func matchesFileType(file models.FileMetadata, requested *string) bool {
+	if requested == nil || strings.TrimSpace(*requested) == "" {
+		return true
+	}
+
+	req := normalizeFileType(*requested)
+	if req == "" {
+		return true
+	}
+
+	actual := normalizeFileType(file.FileType)
+	if actual == "" {
+		dotIndex := strings.LastIndex(file.FileName, ".")
+		if dotIndex >= 0 && dotIndex+1 < len(file.FileName) {
+			actual = normalizeFileType(file.FileName[dotIndex+1:])
+		}
+	}
+
+	if actual == req {
+		return true
+	}
+
+	// Consider document broad enough to include PDFs in user-facing queries.
+	if req == "document" && (actual == "pdf" || actual == "document") {
+		return true
+	}
+
+	return false
+}
+
+func buildFileCorpus(file models.FileMetadata) string {
+	parts := []string{file.FileName, file.NASPath, file.Summary, file.FileType}
+	for _, tag := range file.Tags {
+		parts = append(parts, tag.TagName)
+	}
+	return normalizeTerm(strings.Join(parts, " "))
+}
+
+func containsTerm(corpus, term string) bool {
+	normalized := normalizeTerm(term)
+	if normalized == "" {
+		return false
+	}
+	return strings.Contains(corpus, normalized)
+}
+
+func uniqueNonEmpty(values []string) []string {
+	seen := make(map[string]struct{})
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		n := normalizeTerm(value)
+		if n == "" {
+			continue
+		}
+		if _, exists := seen[n]; exists {
+			continue
+		}
+		seen[n] = struct{}{}
+		out = append(out, n)
+	}
+	return out
+}
+
+func tokenize(values ...string) []string {
+	var tokens []string
+	for _, value := range values {
+		matches := tokenPattern.FindAllString(strings.ToLower(value), -1)
+		for _, token := range matches {
+			if len(token) >= 2 {
+				tokens = append(tokens, token)
+			}
+		}
+	}
+	return uniqueNonEmpty(tokens)
+}
+
+func lexicalEntityScore(file models.FileMetadata, parsed PythonSearchResponse) float64 {
+	corpus := buildFileCorpus(file)
+	score := 0.0
+
+	if containsTerm(corpus, parsed.SemanticIntent) {
+		score += 0.32
+	}
+
+	tags := uniqueNonEmpty(parsed.Tags)
+	if len(tags) > 0 {
+		matchedTags := 0
+		for _, tag := range tags {
+			if containsTerm(corpus, tag) {
+				matchedTags++
+			}
+		}
+		score += (float64(matchedTags) / float64(len(tags))) * 0.20
+	}
+
+	entities := uniqueNonEmpty(append(
+		append(append(parsed.Entities.SubjectNames, parsed.Entities.CourseNames...), parsed.Entities.OrganizationNames...),
+		parsed.Entities.ExtraKeywords...,
+	))
+	if len(entities) > 0 {
+		matchedEntities := 0
+		for _, entity := range entities {
+			if containsTerm(corpus, entity) {
+				matchedEntities++
+			}
+		}
+		score += (float64(matchedEntities) / float64(len(entities))) * 0.30
+	}
+
+	queryTokens := tokenize(strings.Join(append(append([]string{parsed.SemanticIntent}, parsed.Tags...), parsed.Entities.ExtraKeywords...), " "))
+	if len(queryTokens) > 0 {
+		matchedTokens := 0
+		for _, token := range queryTokens {
+			if strings.Contains(corpus, token) {
+				matchedTokens++
+			}
+		}
+		score += (float64(matchedTokens) / float64(len(queryTokens))) * 0.25
+	}
+
+	if score > 1.0 {
+		return 1.0
+	}
+	return score
 }
 
 // Calculate the Cosine Similarity between two float64 vectors
@@ -80,6 +245,22 @@ func SemanticSearch(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to parse AI response"})
 	}
 
+	var startUnix *int64
+	if pythonResp.StartDate != nil {
+		if startTime, err := time.Parse(time.RFC3339, *pythonResp.StartDate); err == nil {
+			v := startTime.Unix()
+			startUnix = &v
+		}
+	}
+
+	var endUnix *int64
+	if pythonResp.EndDate != nil {
+		if endTime, err := time.Parse(time.RFC3339, *pythonResp.EndDate); err == nil {
+			v := endTime.Unix()
+			endUnix = &v
+		}
+	}
+
 	// 2. Fetch all files from DB with their Embeddings and Tags
 	userID := GetUserID(c)
 	var allFiles []models.FileMetadata
@@ -91,38 +272,38 @@ func SemanticSearch(c *fiber.Ctx) error {
 	// 3. Iterate, filter, and calculate cosine similarity
 	for _, file := range allFiles {
 		// Hard Filters: Date Constraints
-		if pythonResp.StartDate != nil {
-			startTime, err := time.Parse(time.RFC3339, *pythonResp.StartDate)
-			if err == nil && file.CreatedAt < startTime.Unix() {
-				continue
-			}
+		if startUnix != nil && file.CreatedAt < *startUnix {
+			continue
 		}
-		if pythonResp.EndDate != nil {
-			endTime, err := time.Parse(time.RFC3339, *pythonResp.EndDate)
-			if err == nil && file.CreatedAt > endTime.Unix() {
-				continue
-			}
-		}
-
-		// Ensure file has vector embeddings to compare against
-		if len(file.Embeddings) == 0 {
-			continue // Legacy files or unsupported types
-		}
-
-		var fileVector []float64
-		err := json.Unmarshal([]byte(file.Embeddings[0].EmbeddingVector), &fileVector)
-		if err != nil || len(fileVector) == 0 {
+		if endUnix != nil && file.CreatedAt > *endUnix {
 			continue
 		}
 
-		// Math: Cosine Similarity
-		score := cosineSimilarity(pythonResp.SearchVector, fileVector)
+		if !matchesFileType(file, pythonResp.FileType) {
+			continue
+		}
 
-		// Hard Filter: Only include somewhat related files (>0.1 similarity)
-		if score > 0.10 {
+		semanticScore := 0.0
+		if len(file.Embeddings) > 0 && len(pythonResp.SearchVector) > 0 {
+			var fileVector []float64
+			err := json.Unmarshal([]byte(file.Embeddings[0].EmbeddingVector), &fileVector)
+			if err == nil && len(fileVector) > 0 {
+				semanticScore = math.Max(cosineSimilarity(pythonResp.SearchVector, fileVector), 0)
+			}
+		}
+
+		lexicalScore := lexicalEntityScore(file, pythonResp)
+
+		// Weighted blend of vector meaning and identity/entity matching.
+		finalScore := (semanticScore * 0.72) + (lexicalScore * 0.28)
+		if len(pythonResp.SearchVector) == 0 {
+			finalScore = lexicalScore
+		}
+
+		if finalScore >= 0.10 || lexicalScore >= 0.24 {
 			searchResults = append(searchResults, SearchResult{
 				File:            file,
-				SimilarityScore: score * 100, // Make it a percentile
+				SimilarityScore: finalScore * 100,
 			})
 		}
 	}

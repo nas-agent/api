@@ -238,10 +238,13 @@ func processNewFile(sourcePath, fileName string, userID uint, config models.User
 		finalPath = destPath
 		log.Printf("Categorized and moved file to: %s (Confidence: %d)", finalPath, aiResp.ConfidenceScore)
 
-		// TRIGGER NOTIFICATION if confidence is between thresholds
-		if float64(aiResp.ConfidenceScore) < autoThreshold {
-			log.Printf("Confidence in notification range (%f < %d < %f). Triggering SSE.",
-				rejectThreshold, aiResp.ConfidenceScore, autoThreshold)
+		// Fetch User Settings to check if notifications are enabled
+		var userSettings models.UserSetting
+		database.DB.Where("user_id = ?", userID).First(&userSettings)
+
+		// TRIGGER NOTIFICATION if user settings allow it
+		if userSettings.AINotifications {
+			log.Printf("Triggering SSE Notification for file: %s", fileName)
 			NotifyFileMoved(fileName, aiResp.SuggestedFolder)
 		}
 

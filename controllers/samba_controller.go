@@ -83,7 +83,7 @@ func DeleteShare(c *fiber.Ctx) error {
 	}
 
 	// 1. Delete from DB
-	database.DB.Delete(&share)
+	database.DB.Unscoped().Delete(&share)
 
 	// 2. Logic to remove from smb.conf would go here
 	// For now, we manually prune or let the user edit the conf.

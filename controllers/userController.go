@@ -217,7 +217,7 @@ func DeleteUser(c *fiber.Ctx) error {
 	var user models.User
 	database.DB.Where("id = ?", id).First(&user)
 	
-	if err := database.DB.Where("id = ?", id).Delete(&models.User{}).Error; err != nil {
+	if err := database.DB.Unscoped().Where("id = ?", id).Delete(&models.User{}).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{"message": "Error deleting user"})
 	}
 

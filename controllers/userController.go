@@ -42,11 +42,16 @@ func Register(c *fiber.Ctx) error {
 
 	username, _ := data["username"].(string)
 	email, _ := data["email"].(string)
+	role, _ := data["role"].(string)
+	if role == "" {
+		role = "user"
+	}
 
 	user := models.User{
 		Username: username,
 		Email:    email,
 		Password: string(password),
+		Role:     role,
 	}
 
 	result := database.DB.Create(&user)

@@ -9,6 +9,7 @@ type User struct {
 	Username           string         `gorm:"uniqueIndex;not null" json:"username"`
 	Email              string         `gorm:"uniqueIndex;not null" json:"email"`
 	Password           string         `gorm:"not null" json:"-"`
+	Role               string         `gorm:"default:'user'" json:"role"`
 	PersonalFolderPath string         `json:"personal_folder_path"`
 	CreatedAt          int64          `gorm:"autoCreateTime" json:"created_date"`
 	UpdatedAt          int64          `gorm:"autoUpdateTime" json:"updated_date"`

@@ -11,6 +11,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
+	"strings"
 )
 
 // GetUserID extracts user_id from JWT claims in the context
@@ -60,8 +61,16 @@ func Register(c *fiber.Ctx) error {
 
 	result := database.DB.Create(&user)
 	if result.Error != nil {
+		errorMessage := "Username or Email already exists"
+		if strings.Contains(result.Error.Error(), "users.email") {
+			errorMessage = "Email address is already registered"
+		} else if strings.Contains(result.Error.Error(), "users.username") {
+			errorMessage = "Username is already taken"
+		}
+
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"message": "Username or Email already exists or invalid data",
+			"message": errorMessage,
+			"error":   result.Error.Error(),
 		})
 	}
 

@@ -27,17 +27,25 @@ func GetUserID(c *fiber.Ctx) uint {
 
 // Register a new user
 func Register(c *fiber.Ctx) error {
-	var data map[string]string
+	var data map[string]interface{}
 
 	if err := c.BodyParser(&data); err != nil {
 		return err
 	}
 
-	password, _ := bcrypt.GenerateFromPassword([]byte(data["password"]), 14)
+	passwordStr, ok := data["password"].(string)
+	if !ok {
+		return c.Status(400).JSON(fiber.Map{"message": "Password is required"})
+	}
+
+	password, _ := bcrypt.GenerateFromPassword([]byte(passwordStr), 14)
+
+	username, _ := data["username"].(string)
+	email, _ := data["email"].(string)
 
 	user := models.User{
-		Username: data["username"],
-		Email:    data["email"],
+		Username: username,
+		Email:    email,
 		Password: string(password),
 	}
 
@@ -53,16 +61,19 @@ func Register(c *fiber.Ctx) error {
 
 // Login user and return a signed JWT token
 func Login(c *fiber.Ctx) error {
-	var data map[string]string
+	var data map[string]interface{}
 
 	if err := c.BodyParser(&data); err != nil {
 		return err
 	}
 
+	username, _ := data["username"].(string)
+	password, _ := data["password"].(string)
+
 	var user models.User
 
 	// Check by username (could also support email)
-	database.DB.Where("username = ?", data["username"]).First(&user)
+	database.DB.Where("username = ?", username).First(&user)
 
 	if user.ID == 0 {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
@@ -70,7 +81,7 @@ func Login(c *fiber.Ctx) error {
 		})
 	}
 
-	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(data["password"])); err != nil {
+	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password)); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"message": "Incorrect password",
 		})

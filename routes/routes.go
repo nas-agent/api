@@ -58,13 +58,13 @@ func SetupSetup(app *fiber.App) {
 	// NAS
 	api.Get("/nas/storage/devices", controllers.GetStorageDevices)
 	api.Get("/monitor", controllers.GetSystemStats)
+	api.Get("/users", controllers.GetUsers)
+	api.Delete("/users/:id", controllers.DeleteUser)
 
 	// Protected Routes
 	protected := api.Group("/", JWTMiddleware())
 	protected.Post("/users/change-password", controllers.ChangePassword)
 	protected.Get("/users/profile", controllers.GetProfile)
-	protected.Get("/users", controllers.GetUsers)
-	protected.Delete("/users/:id", controllers.DeleteUser)
 
 	// Settings
 	protected.Get("/settings", controllers.GetSettings)

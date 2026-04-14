@@ -74,6 +74,14 @@ func SetupSetup(app *fiber.App) {
 	ai.Get("/history", controllers.GetHistory)
 	ai.Post("/history", controllers.AddHistory)
 	ai.Delete("/history", controllers.ClearHistory)
+	ai.Post("/feedback", controllers.SubmitPersonalizationFeedback)
+	ai.Post("/feedback/capture-manual-move", controllers.CaptureManualMoveFeedback)
+	ai.Post("/feedback/manual-relocate", controllers.ManualRelocateFeedback)
+	ai.Get("/personalization/profile", controllers.GetPersonalizationProfile)
+	ai.Post("/personalization/profile/generate-description", controllers.GenerateFolderDescription)
+	ai.Put("/personalization/folder-description", controllers.UpdateFolderProfileDescription)
+	ai.Delete("/personalization/reset", controllers.ResetPersonalization)
+	ai.Post("/naming/suggest", controllers.SuggestPersonalizedFilename)
 
 	// Monitors
 	ai.Get("/monitors", controllers.GetMonitors)

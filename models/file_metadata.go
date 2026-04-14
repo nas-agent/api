@@ -11,6 +11,7 @@ type FileMetadata struct {
 	LastAccessed  int64  `json:"last_accessed"`
 	OwnerID       uint   `gorm:"index" json:"owner_id"`
 	Summary       string `gorm:"type:text" json:"summary"`
+	Entities      string `gorm:"type:text" json:"entities"`
 
 	// Relationships
 	Tags       []FileTag       `gorm:"foreignKey:FileID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE;" json:"tags"`

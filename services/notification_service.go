@@ -52,3 +52,18 @@ func NotifyFileMoved(filename, folder string) {
 	}
 	pendingNotifications = append(pendingNotifications, event)
 }
+
+// NotifyApprovalNeeded adds a notification when a file requires manual review.
+func NotifyApprovalNeeded(filename, suggestedFolder string) {
+	notifMutex.Lock()
+	defer notifMutex.Unlock()
+
+	event := NotificationEvent{
+		Type:     "approval_needed",
+		Title:    "AI Assistant",
+		Body:     fmt.Sprintf("Review needed for '%s' -> suggested folder '%s'", filename, suggestedFolder),
+		Filename: filename,
+		Folder:   suggestedFolder,
+	}
+	pendingNotifications = append(pendingNotifications, event)
+}

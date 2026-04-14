@@ -3,6 +3,7 @@ package controllers
 import (
 	"api/database"
 	"api/models"
+	"strings"
 
 	"github.com/gofiber/fiber/v2"
 )
@@ -13,7 +14,39 @@ func GetHistory(c *fiber.Ctx) error {
 	userID := GetUserID(c)
 	var history []models.AIActionLog
 	database.DB.Where("user_id = ?", userID).Order("log_id desc").Limit(100).Find(&history)
-	return c.JSON(history)
+
+	fileIDs := make([]uint, 0, len(history))
+	for _, h := range history {
+		if h.FileID > 0 {
+			fileIDs = append(fileIDs, h.FileID)
+		}
+	}
+
+	pathsByFileID := map[uint]string{}
+	if len(fileIDs) > 0 {
+		var files []models.FileMetadata
+		database.DB.Select("id, nas_path").Where("id IN ?", fileIDs).Find(&files)
+		for _, file := range files {
+			if strings.TrimSpace(file.NASPath) != "" {
+				pathsByFileID[file.ID] = file.NASPath
+			}
+		}
+	}
+
+	type HistoryRow struct {
+		models.AIActionLog
+		FullPath string `json:"full_path"`
+	}
+
+	rows := make([]HistoryRow, 0, len(history))
+	for _, h := range history {
+		rows = append(rows, HistoryRow{
+			AIActionLog: h,
+			FullPath:    pathsByFileID[h.FileID],
+		})
+	}
+
+	return c.JSON(rows)
 }
 
 func AddHistory(c *fiber.Ctx) error {

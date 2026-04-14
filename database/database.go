@@ -11,6 +11,7 @@ import (
 )
 
 var DB *gorm.DB
+var ErrRecordNotFound = gorm.ErrRecordNotFound
 
 func ConnectDB() {
 	var err error
@@ -31,11 +32,14 @@ func ConnectDB() {
 		&models.UserUsage{},
 		&models.UserAIConfig{},
 		&models.AIActionLog{},
+		&models.DecisionEvent{},
 		&models.UserSetting{},
 		&models.FileMetadata{},
 		&models.FileTag{},
 		&models.FileEmbedding{},
 		&models.FeedbackLog{},
+		&models.UserFolderProfile{},
+		&models.UserNamingProfile{},
 	)
 	if err != nil {
 		log.Fatal("Failed to auto-migrate database. \n", err)

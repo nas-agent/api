@@ -3,11 +3,13 @@ package controllers
 import (
 	"api/database"
 	"api/models"
+	"api/services"
 	"bytes"
 	"encoding/json"
 	"io"
 	"math"
 	"net/http"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -268,6 +270,12 @@ func SemanticSearch(c *fiber.Ctx) error {
 	database.DB.Where("owner_id = ?", userID).Preload("Embeddings").Preload("Tags").Find(&allFiles)
 
 	var searchResults []SearchResult
+	profiles, _ := services.LoadUserFolderProfiles(userID)
+	queryTokens := tokenize(strings.Join(append(
+		append([]string{pythonResp.SemanticIntent}, pythonResp.Tags...),
+		append(append(pythonResp.Entities.SubjectNames, pythonResp.Entities.CourseNames...),
+			append(pythonResp.Entities.OrganizationNames, pythonResp.Entities.ExtraKeywords...)...)...),
+		" "))
 
 	// 3. Iterate, filter, and calculate cosine similarity
 	for _, file := range allFiles {
@@ -293,11 +301,17 @@ func SemanticSearch(c *fiber.Ctx) error {
 		}
 
 		lexicalScore := lexicalEntityScore(file, pythonResp)
+		folderName := filepath.Base(filepath.Dir(file.NASPath))
+		if folderName == "." || strings.TrimSpace(folderName) == "" {
+			folderName = filepath.Base(file.NASPath)
+		}
+		personalizationScore := services.PersonalizationScore(folderName, queryTokens, pythonResp.SearchVector, profiles)
 
 		// Weighted blend of vector meaning and identity/entity matching.
-		finalScore := (semanticScore * 0.72) + (lexicalScore * 0.28)
+		baseScore := (semanticScore * 0.72) + (lexicalScore * 0.28)
+		finalScore := (baseScore * 0.85) + (personalizationScore * 0.15)
 		if len(pythonResp.SearchVector) == 0 {
-			finalScore = lexicalScore
+			finalScore = (lexicalScore * 0.80) + (personalizationScore * 0.20)
 		}
 
 		if finalScore >= 0.10 || lexicalScore >= 0.24 {

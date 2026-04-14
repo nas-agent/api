@@ -63,6 +63,8 @@ func SetupSetup(app *fiber.App) {
 	protected := api.Group("/", JWTMiddleware())
 	protected.Post("/users/change-password", controllers.ChangePassword)
 	protected.Get("/users/profile", controllers.GetProfile)
+	protected.Get("/users", controllers.GetUsers)
+	protected.Delete("/users/:id", controllers.DeleteUser)
 
 	// Settings
 	protected.Get("/settings", controllers.GetSettings)

@@ -195,11 +195,6 @@ func DeleteUser(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"message": "Missing user ID"})
 	}
 
-	// Prevent deleting user ID 1 (default admin) in demo
-	if id == "1" {
-		return c.Status(403).JSON(fiber.Map{"message": "Cannot delete primary administrator"})
-	}
-
 	if err := database.DB.Delete(&models.User{}, id).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{"message": "Error deleting user"})
 	}

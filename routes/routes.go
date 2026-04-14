@@ -57,6 +57,7 @@ func SetupSetup(app *fiber.App) {
 
 	// NAS
 	api.Get("/nas/storage/devices", controllers.GetStorageDevices)
+	api.Get("/monitor", controllers.GetSystemStats)
 
 	// Protected Routes
 	protected := api.Group("/", JWTMiddleware())

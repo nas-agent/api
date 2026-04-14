@@ -34,6 +34,7 @@ type FolderProfileSnapshot struct {
 	Keyword       map[string]float64
 	Centroid      []float64
 	CentroidCount int
+	Description   string
 	LastUsedAt    int64
 }
 
@@ -122,6 +123,7 @@ func LoadUserFolderProfiles(userID uint) (map[string]FolderProfileSnapshot, erro
 			Keyword:       keyword,
 			Centroid:      centroid,
 			CentroidCount: row.CentroidCount,
+			Description:   row.Description,
 			LastUsedAt:    row.LastUsedAt,
 		}
 	}
@@ -167,7 +169,24 @@ func PersonalizationScore(folderName string, queryTokens []string, searchVector 
 		recency = math.Exp(-hoursAgo / 168.0) // weekly decay
 	}
 
-	final := (0.55 * acceptRatio) + (0.20 * keywordScore) + (0.20 * centroidScore) + (0.05 * recency)
+	descriptionScore := 0.0
+	if profile.Description != "" && len(queryTokens) > 0 {
+		descTokens := tokenize(profile.Description)
+		matches := 0
+		for _, q := range queryTokens {
+			for _, d := range descTokens {
+				if q == d {
+					matches++
+					break
+				}
+			}
+		}
+		if len(queryTokens) > 0 {
+			descriptionScore = float64(matches) / float64(len(queryTokens))
+		}
+	}
+
+	final := (0.45 * acceptRatio) + (0.15 * keywordScore) + (0.15 * centroidScore) + (0.20 * descriptionScore) + (0.05 * recency)
 	if final > 1 {
 		return 1
 	}

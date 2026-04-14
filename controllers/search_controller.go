@@ -103,8 +103,8 @@ func matchesFileType(file models.FileMetadata, requested *string) bool {
 	return false
 }
 
-func buildFileCorpus(file models.FileMetadata) string {
-	parts := []string{file.FileName, file.NASPath, file.Summary, file.FileType}
+func buildFileCorpus(file models.FileMetadata, folderDesc string) string {
+	parts := []string{file.FileName, file.NASPath, file.Summary, file.FileType, folderDesc}
 	for _, tag := range file.Tags {
 		parts = append(parts, tag.TagName)
 	}
@@ -149,8 +149,8 @@ func tokenize(values ...string) []string {
 	return uniqueNonEmpty(tokens)
 }
 
-func lexicalEntityScore(file models.FileMetadata, parsed PythonSearchResponse) float64 {
-	corpus := buildFileCorpus(file)
+func lexicalEntityScore(file models.FileMetadata, folderDesc string, parsed PythonSearchResponse) float64 {
+	corpus := buildFileCorpus(file, folderDesc)
 	score := 0.0
 
 	if containsTerm(corpus, parsed.SemanticIntent) {
@@ -300,11 +300,18 @@ func SemanticSearch(c *fiber.Ctx) error {
 			}
 		}
 
-		lexicalScore := lexicalEntityScore(file, pythonResp)
+		lexicalScore := lexicalEntityScore(file, "", pythonResp)
 		folderName := filepath.Base(filepath.Dir(file.NASPath))
 		if folderName == "." || strings.TrimSpace(folderName) == "" {
 			folderName = filepath.Base(file.NASPath)
 		}
+
+		// Inject Folder Description context if available
+		fProfile, hasProfile := profiles[strings.ToLower(strings.TrimSpace(folderName))]
+		if hasProfile && fProfile.Description != "" {
+			lexicalScore = lexicalEntityScore(file, fProfile.Description, pythonResp)
+		}
+
 		personalizationScore := services.PersonalizationScore(folderName, queryTokens, pythonResp.SearchVector, profiles)
 
 		// Weighted blend of vector meaning and identity/entity matching.

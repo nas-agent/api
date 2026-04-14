@@ -44,9 +44,10 @@ type AIAnalysisResponse struct {
 }
 
 var (
-	watcher  *fsnotify.Watcher
-	watchMap map[string]uint
-	done     chan bool
+	watcher     *fsnotify.Watcher
+	watchMap    map[string]uint
+	done        chan bool
+	aiSemaphore = make(chan struct{}, 2)
 )
 
 // InitFileWatcher starts a background service monitoring origin paths
@@ -205,9 +206,13 @@ func processNewFile(sourcePath, fileName string, userID uint, config models.User
 		}
 	}
 
-	// Trigger Python & Wait for Response
+	// Trigger Python & Wait for Response (With Concurrency Control)
+	// This prevents crashing the local Python GPU by blasting it with 50 simultaneous files
 	startTime := time.Now()
+	log.Printf("Queueing %s for AI analysis...", fileName)
+	aiSemaphore <- struct{}{}
 	aiResp, err := triggerAIAnalysis(metadata.ID, sourcePath, fileName, userID, existingFolders, folderProfiles, config)
+	<-aiSemaphore
 	duration := time.Since(startTime)
 	if err != nil {
 		log.Printf("AI Analysis failed for %s: %v. File will remain in origin.", fileName, err)
@@ -226,6 +231,13 @@ func processNewFile(sourcePath, fileName string, userID uint, config models.User
 	selectedFolder := aiResp.SuggestedFolder
 	if strings.TrimSpace(personalizedFolder) != "" {
 		selectedFolder = personalizedFolder
+	}
+
+	// OVERRIDE UNRELIABLE CONFIDENCE: LLMs are terrible at self-evaluating confidence.
+	// We blend the LLM's guess with our robust mathematical Personalization Score.
+	mathConfidence := folderProfileScore * 100.0
+	if mathConfidence > 0 {
+		aiResp.ConfidenceScore = int((mathConfidence * 0.75) + (float64(aiResp.ConfidenceScore) * 0.25))
 	}
 
 	suggestedFileName := fileName

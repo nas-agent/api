@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -603,6 +604,7 @@ func ratio(a, b int) float64 {
 	return float64(a) / float64(b)
 }
 func GenerateFolderDescription(c *fiber.Ctx) error {
+	log.Printf("[AI GATEWAY] Processing description generation request...")
 	userID := GetUserID(c)
 	var req struct {
 		FolderName string `json:"folder_name"`

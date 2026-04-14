@@ -55,6 +55,9 @@ func SetupSetup(app *fiber.App) {
 	api.Post("/users/register", controllers.Register)
 	api.Post("/users/login", controllers.Login)
 
+	// NAS
+	api.Get("/nas/storage/devices", controllers.GetStorageDevices)
+
 	// Protected Routes
 	protected := api.Group("/", JWTMiddleware())
 	protected.Post("/users/change-password", controllers.ChangePassword)

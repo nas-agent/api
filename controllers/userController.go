@@ -149,7 +149,7 @@ func ChangePassword(c *fiber.Ctx) error {
 	}
 
 	var user models.User
-	if err := database.DB.First(&user, userID).Error; err != nil {
+	if err := database.DB.Where("id = ?", userID).First(&user).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"message": "User not found"})
 	}
 
@@ -206,9 +206,9 @@ func DeleteUser(c *fiber.Ctx) error {
 	}
 
 	var user models.User
-	database.DB.First(&user, id)
+	database.DB.Where("id = ?", id).First(&user)
 	
-	if err := database.DB.Delete(&models.User{}, id).Error; err != nil {
+	if err := database.DB.Where("id = ?", id).Delete(&models.User{}).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{"message": "Error deleting user"})
 	}
 

@@ -120,7 +120,7 @@ func probeAIHealth() (bool, bool) {
 
 func GetDashboardSummary(c *fiber.Ctx) error {
 	userID := GetUserID(c)
-	if userID == 0 {
+	if userID == "" {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Unauthorized"})
 	}
 

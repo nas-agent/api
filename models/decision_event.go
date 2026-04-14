@@ -2,7 +2,7 @@ package models
 
 type DecisionEvent struct {
 	ID                uint   `gorm:"primaryKey" json:"id"`
-	UserID            uint   `gorm:"index;not null" json:"user_id"`
+	UserID            string `gorm:"index;not null" json:"user_id"`
 	FileID            uint   `gorm:"index" json:"file_id"`
 	Source            string `gorm:"size:32;index" json:"source"`
 	Outcome           string `gorm:"size:64;index" json:"outcome"`

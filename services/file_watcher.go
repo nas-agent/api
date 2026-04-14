@@ -24,7 +24,7 @@ type AITriggerPayload struct {
 	FileID            uint     `json:"file_id"`
 	FilePath          string   `json:"file_path"`
 	FileName          string   `json:"file_name"`
-	UserID            uint     `json:"user_id"`
+	UserID            string   `json:"user_id"`
 	ExistingFolders   []string `json:"existing_folders"`
 	AnalysisProvider  string   `json:"analysis_provider"`
 	GeminiAPIKey      string            `json:"gemini_api_key"`
@@ -45,7 +45,7 @@ type AIAnalysisResponse struct {
 
 var (
 	watcher     *fsnotify.Watcher
-	watchMap    map[string]uint
+	watchMap    map[string]string
 	done        chan bool
 	aiSemaphore = make(chan struct{}, 2)
 )
@@ -76,7 +76,7 @@ func RefreshFileWatcher() {
 	var configs []models.UserAIConfig
 	database.DB.Find(&configs)
 
-	watchMap = make(map[string]uint)
+	watchMap = make(map[string]string)
 	done = make(chan bool)
 
 	for _, config := range configs {
@@ -147,7 +147,7 @@ func watchEventLoop() {
 	}
 }
 
-func processNewFile(sourcePath, fileName string, userID uint, config models.UserAIConfig) {
+func processNewFile(sourcePath, fileName string, userID string, config models.UserAIConfig) {
 	// Create Initial Metadata (Pending AI Analysis)
 	fileInfo, _ := os.Stat(sourcePath)
 	size := int64(0)
@@ -418,7 +418,7 @@ func processNewFile(sourcePath, fileName string, userID uint, config models.User
 	}
 }
 
-func triggerAIAnalysis(fileID uint, filePath string, fileName string, userID uint, existingFolders []string, folderProfiles map[string]string, config models.UserAIConfig) (*AIAnalysisResponse, error) {
+func triggerAIAnalysis(fileID uint, filePath string, fileName string, userID string, existingFolders []string, folderProfiles map[string]string, config models.UserAIConfig) (*AIAnalysisResponse, error) {
 	provider := strings.ToLower(strings.TrimSpace(config.AnalysisProvider))
 	if provider == "" {
 		provider = "local"

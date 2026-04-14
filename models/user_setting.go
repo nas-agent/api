@@ -6,7 +6,7 @@ import (
 
 type UserSetting struct {
 	ID              uint      `gorm:"primaryKey" json:"id"`
-	UserID          uint      `gorm:"uniqueIndex;not null" json:"user_id"`
+	UserID          string      `gorm:"uniqueIndex;not null" json:"user_id"`
 	Language        string    `gorm:"default:'en'" json:"language"`
 	Theme           string    `gorm:"default:'light'" json:"theme"`
 	LaunchOnStartup bool      `gorm:"default:false" json:"launch_on_startup"`

@@ -1,11 +1,12 @@
 package models
 
 import (
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
 type User struct {
-	ID                 uint           `gorm:"primaryKey" json:"user_id"`
+	ID                 string         `gorm:"primaryKey;type:uuid" json:"user_id"`
 	Username           string         `gorm:"uniqueIndex;not null" json:"username"`
 	Email              string         `gorm:"uniqueIndex;not null" json:"email"`
 	Password           string         `gorm:"not null" json:"-"`
@@ -21,4 +22,12 @@ type User struct {
 	Setting      UserSetting    `gorm:"foreignKey:UserID" json:"setting"`
 	Files        []FileMetadata `gorm:"foreignKey:OwnerID" json:"files"`
 	FeedbackLogs []FeedbackLog  `gorm:"foreignKey:UserID" json:"feedback_logs"`
+}
+
+// BeforeCreate hook to generate a UUID before moving to DB
+func (u *User) BeforeCreate(tx *gorm.DB) (err error) {
+	if u.ID == "" {
+		u.ID = uuid.New().String()
+	}
+	return
 }

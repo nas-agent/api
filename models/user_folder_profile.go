@@ -2,7 +2,7 @@ package models
 
 type UserFolderProfile struct {
 	ID             uint   `gorm:"primaryKey" json:"id"`
-	UserID         uint   `gorm:"index:idx_user_folder,unique;not null" json:"user_id"`
+	UserID         string `gorm:"index:idx_user_folder,unique;not null" json:"user_id"`
 	FolderName     string `gorm:"index:idx_user_folder,unique;not null" json:"folder_name"`
 	AcceptCount    int    `gorm:"default:0" json:"accept_count"`
 	RejectCount    int    `gorm:"default:0" json:"reject_count"`

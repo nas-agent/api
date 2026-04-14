@@ -15,7 +15,7 @@ import (
 )
 
 type DecisionEventInput struct {
-	UserID            uint
+	UserID            string
 	FileID            uint
 	Source            string
 	Outcome           string
@@ -41,7 +41,7 @@ type FolderProfileSnapshot struct {
 var tokenExtractor = regexp.MustCompile(`[\p{L}\p{N}]{2,}`)
 
 func RecordDecisionEvent(input DecisionEventInput) error {
-	if input.UserID == 0 {
+	if input.UserID == "" {
 		return nil
 	}
 
@@ -104,7 +104,7 @@ func shouldCreateFeedback(input DecisionEventInput) bool {
 	return reason == "changed_folder" || reason == "changed_name"
 }
 
-func LoadUserFolderProfiles(userID uint) (map[string]FolderProfileSnapshot, error) {
+func LoadUserFolderProfiles(userID string) (map[string]FolderProfileSnapshot, error) {
 	out := map[string]FolderProfileSnapshot{}
 	var rows []models.UserFolderProfile
 	if err := database.DB.Where("user_id = ?", userID).Find(&rows).Error; err != nil {
@@ -193,7 +193,7 @@ func PersonalizationScore(folderName string, queryTokens []string, searchVector 
 	return final
 }
 
-func SuggestFolderForFile(userID uint, aiFolder string, existingFolders []string, fileName string, summary string, tags []string) (string, float64) {
+func SuggestFolderForFile(userID string, aiFolder string, existingFolders []string, fileName string, summary string, tags []string) (string, float64) {
 	if !allowFolderOverride(userID) {
 		return aiFolder, 0
 	}
@@ -230,7 +230,7 @@ func SuggestFolderForFile(userID uint, aiFolder string, existingFolders []string
 	return bestFolder, bestScore
 }
 
-func SuggestPersonalizedFileName(userID uint, originalFileName string, tags []string, fallbackStyle string) string {
+func SuggestPersonalizedFileName(userID string, originalFileName string, tags []string, fallbackStyle string) string {
 	base := strings.TrimSuffix(originalFileName, filepath.Ext(originalFileName))
 	ext := filepath.Ext(originalFileName)
 	if strings.TrimSpace(base) == "" {
@@ -327,7 +327,7 @@ func updateFolderProfile(input DecisionEventInput) error {
 }
 
 func updateNamingProfile(input DecisionEventInput) error {
-	if input.UserID == 0 {
+	if input.UserID == "" {
 		return nil
 	}
 	finalName := strings.TrimSpace(input.FinalFileName)
@@ -561,7 +561,7 @@ func clamp(v, minV, maxV float64) float64 {
 	return v
 }
 
-func allowFolderOverride(userID uint) bool {
+func allowFolderOverride(userID string) bool {
 	var events []models.DecisionEvent
 	database.DB.Where("user_id = ?", userID).Order("created_at desc").Limit(400).Find(&events)
 	if len(events) < 30 {

@@ -12,16 +12,17 @@ import (
 )
 
 // GetUserID extracts user_id from JWT claims in the context
-func GetUserID(c *fiber.Ctx) uint {
+func GetUserID(c *fiber.Ctx) string {
 	user := c.Locals("user")
 	if user == nil {
-		// For demo/dev if middleware not fully enforced, try parsing manually or skip
-		// In a real app, middleware would set this.
-		return 0
+		return ""
 	}
 	token := user.(*jwt.Token)
 	claims := token.Claims.(jwt.MapClaims)
-	userID := uint(claims["user_id"].(float64))
+	userID, ok := claims["user_id"].(string)
+	if !ok {
+		return ""
+	}
 	return userID
 }
 
@@ -80,7 +81,7 @@ func Login(c *fiber.Ctx) error {
 	// Check by username (could also support email)
 	database.DB.Where("username = ?", username).First(&user)
 
-	if user.ID == 0 {
+	if user.ID == "" {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
 			"message": "User not found",
 		})
@@ -134,7 +135,7 @@ func ChangePassword(c *fiber.Ctx) error {
 
 	// Identify current user via JWT
 	userID := GetUserID(c)
-	if userID == 0 {
+	if userID == "" {
 		return c.Status(401).JSON(fiber.Map{"message": "Unauthorized"})
 	}
 
@@ -161,7 +162,7 @@ func ChangePassword(c *fiber.Ctx) error {
 // GetProfile returns the current logged-in user profile
 func GetProfile(c *fiber.Ctx) error {
 	userID := GetUserID(c)
-	if userID == 0 {
+	if userID == "" {
 		return c.Status(401).JSON(fiber.Map{"message": "Unauthorized"})
 	}
 

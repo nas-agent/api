@@ -9,7 +9,7 @@ type FileMetadata struct {
 	CreatedAt     int64  `gorm:"autoCreateTime" json:"created_at"`
 	UpdatedAt     int64  `gorm:"autoUpdateTime" json:"updated_at"`
 	LastAccessed  int64  `json:"last_accessed"`
-	OwnerID       uint   `gorm:"index" json:"owner_id"`
+	OwnerID       string `gorm:"index" json:"owner_id"`
 	Summary       string `gorm:"type:text" json:"summary"`
 	Entities      string `gorm:"type:text" json:"entities"`
 

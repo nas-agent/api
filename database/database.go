@@ -40,6 +40,7 @@ func ConnectDB() {
 		&models.FeedbackLog{},
 		&models.UserFolderProfile{},
 		&models.UserNamingProfile{},
+		&models.Share{},
 	)
 	if err != nil {
 		log.Fatal("Failed to auto-migrate database. \n", err)

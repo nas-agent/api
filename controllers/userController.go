@@ -3,6 +3,8 @@ package controllers
 import (
 	"api/database"
 	"api/models"
+	"api/services"
+	"fmt"
 	"os"
 	"time"
 
@@ -53,6 +55,7 @@ func Register(c *fiber.Ctx) error {
 		Email:    email,
 		Password: string(password),
 		Role:     role,
+		PersonalFolderPath: fmt.Sprintf("/mnt/raid1/homes/%s", username),
 	}
 
 	result := database.DB.Create(&user)
@@ -60,6 +63,12 @@ func Register(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"message": "Username or Email already exists or invalid data",
 		})
+	}
+
+	// Sync to Samba
+	if err := services.Samba.SyncSambaUser(username, passwordStr); err != nil {
+		fmt.Printf("Warning: Failed to sync user to Samba: %v\n", err)
+		// We don't fail registration if Samba sync fails, but we log it.
 	}
 
 	return c.JSON(user)
@@ -196,8 +205,16 @@ func DeleteUser(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"message": "Missing user ID"})
 	}
 
+	var user models.User
+	database.DB.First(&user, id)
+	
 	if err := database.DB.Delete(&models.User{}, id).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{"message": "Error deleting user"})
+	}
+
+	// Remove from Samba
+	if user.Username != "" {
+		services.Samba.RemoveSambaUser(user.Username)
 	}
 
 	return c.JSON(fiber.Map{

@@ -91,6 +91,48 @@ func (s *SambaService) RegisterShare(name, path, owner string, isPublic bool) er
 	return s.RestartService()
 }
 
+// UnregisterShare removes a share section from smb.conf
+func (s *SambaService) UnregisterShare(name string) error {
+	// 1. Read the current configuration
+	cmd := exec.Command("sudo", "cat", s.ConfigPath)
+	out, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("failed to read smb.conf: %v", err)
+	}
+
+	// 2. Filter out the target section
+	lines := strings.Split(string(out), "\n")
+	var newLines []string
+	skip := false
+	targetSection := fmt.Sprintf("[%s]", name)
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		// Detect start of a new section
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			if trimmed == targetSection {
+				skip = true
+				continue
+			}
+			skip = false
+		}
+		
+		if !skip {
+			newLines = append(newLines, line)
+		}
+	}
+
+	// 3. Write back the filtered content
+	newContent := strings.Join(newLines, "\n")
+	teeCmd := exec.Command("sudo", "tee", s.ConfigPath)
+	teeCmd.Stdin = strings.NewReader(newContent)
+	if err := teeCmd.Run(); err != nil {
+		return fmt.Errorf("failed to write smb.conf: %v", err)
+	}
+
+	return s.RestartService()
+}
+
 // RestartService reloads the Samba daemon
 func (s *SambaService) RestartService() error {
 	return exec.Command("sudo", "systemctl", "restart", "smbd").Run()

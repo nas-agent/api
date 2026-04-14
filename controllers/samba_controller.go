@@ -82,12 +82,13 @@ func DeleteShare(c *fiber.Ctx) error {
 		return c.Status(404).JSON(fiber.Map{"error": "Share not found"})
 	}
 
-	// 1. Delete from DB
+	// 1. Unregister from Samba system
+	if err := services.Samba.UnregisterShare(share.Name); err != nil {
+		fmt.Printf("Warning: Failed to remove share from Samba config: %v\n", err)
+	}
+
+	// 2. Delete from DB
 	database.DB.Unscoped().Delete(&share)
 
-	// 2. Logic to remove from smb.conf would go here
-	// For now, we manually prune or let the user edit the conf.
-	// (Pruning smb.conf is safer manually to avoid corrupting it).
-
-	return c.JSON(fiber.Map{"message": "Share removed from database"})
+	return c.JSON(fiber.Map{"message": "Share removed from database and Samba config"})
 }

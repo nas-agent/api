@@ -63,16 +63,12 @@ type LsblkDevice struct {
 }
 
 func GetStorageDevices(c *fiber.Ctx) error {
-	log.Println("--- GetStorageDevices Request Triggered ---")
-
 	// Execute lsblk to get full picture of hardware and mount points
 	cmd := exec.Command("lsblk", "--json", "-o", "NAME,KNAME,LABEL,MOUNTPOINT,SIZE,FSTYPE,MODEL,SERIAL,TYPE,TRAN,VENDOR")
 	output, err := cmd.Output()
 	if err != nil {
-		log.Printf("lsblk error: %v", err)
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to execute lsblk: " + err.Error()})
 	}
-	log.Printf("lsblk raw output length: %d bytes\n", len(output))
 
 	var lsblk LsblkOutput
 	if err := json.Unmarshal(output, &lsblk); err != nil {
@@ -85,7 +81,6 @@ func GetStorageDevices(c *fiber.Ctx) error {
 	mountedPaths := make(map[string]bool) // Track already-added mount points
 
 	for _, dev := range lsblk.Blockdevices {
-		log.Printf("lsblk found block device: %s (Type: %s, Mount: '%s')", dev.Name, dev.Type, dev.Mountpoint)
 		// Process each block device (disk, lvm, raid)
 		if dev.Type == "disk" {
 			// A disk might have partitions. We need to check if ANY of its children are mounted.
@@ -117,7 +112,6 @@ func GetStorageDevices(c *fiber.Ctx) error {
 
 	// Additionally, read /proc/mounts to capture all mounted filesystems
 	// This catches bind mounts, manually mounted directories, and other mounts not shown by lsblk
-	log.Println("Reading /proc/mounts...")
 	if file, err := os.Open("/proc/mounts"); err == nil {
 		defer file.Close()
 		scanner := bufio.NewScanner(file)
@@ -128,12 +122,6 @@ func GetStorageDevices(c *fiber.Ctx) error {
 				device := parts[0]
 				mountPoint := parts[1]
 				fstype := parts[2]
-
-				// Look for mount points starting with /mnt or /media (typical for NAS)
-				// Or check all, but log specific ones
-				if strings.HasPrefix(mountPoint, "/mnt") || strings.HasPrefix(mountPoint, "/media") {
-					log.Printf("Found potential NAS mount in /proc/mounts: device=%s, mountPoint=%s, fstype=%s", device, mountPoint, fstype)
-				}
 
 				// Skip system mounts and already-processed mounts
 				if shouldSkipMount(mountPoint) || mountedPaths[mountPoint] {
@@ -156,7 +144,6 @@ func GetStorageDevices(c *fiber.Ctx) error {
 				}
 
 				// Create a logical volume entry for this mount
-				log.Printf("Adding /proc/mounts entry: %s on %s (fstype=%s)", device, mountPoint, fstype)
 
 				usage, _ := disk.Usage(mountPoint)
 				name := filepath.Base(mountPoint)
@@ -178,11 +165,8 @@ func GetStorageDevices(c *fiber.Ctx) error {
 				mountedPaths[mountPoint] = true
 			}
 		}
-	} else {
-		log.Printf("Failed to read /proc/mounts: %v", err)
 	}
 
-	log.Printf("GetStorageDevices final counts: %d mounted, %d unmounted", len(mounted), len(unmounted))
 	return c.JSON(fiber.Map{
 		"mounted":   mounted,
 		"unmounted": unmounted,
@@ -219,8 +203,6 @@ func shouldSkipMount(mountPoint string) bool {
 
 // processDeviceTree recursively looks for mount points in partitions or logical volumes
 func processDeviceTree(dev LsblkDevice, mounted *[]LogicalVolume, unmounted *[]PhysicalDisk, hasMountedChild *bool, mountedPaths map[string]bool) {
-	log.Printf("  -> processDeviceTree checking dev: %s (Type: %s, Mount: %s, Children: %d) ", dev.Kname, dev.Type, dev.Mountpoint, len(dev.Children))
-
 	if dev.Mountpoint != "" {
 		*hasMountedChild = true
 		addMountedVolume(dev, mounted, mountedPaths)
@@ -232,16 +214,13 @@ func processDeviceTree(dev LsblkDevice, mounted *[]LogicalVolume, unmounted *[]P
 }
 
 func addMountedVolume(dev LsblkDevice, mounted *[]LogicalVolume, mountedPaths map[string]bool) {
-	log.Printf("    -> addMountedVolume called for %s (%s)", dev.Kname, dev.Mountpoint)
 	// Skip system-critical paths that shouldn't be managed/shared easily
 	if dev.Mountpoint == "/" || dev.Mountpoint == "/boot" || strings.HasPrefix(dev.Mountpoint, "/boot/") {
-		log.Printf("       [Skipped] System-critical path : %s", dev.Mountpoint)
 		return
 	}
 
 	// Skip if already added
 	if mountedPaths[dev.Mountpoint] {
-		log.Printf("       [Skipped] Already tracked mount path: %s", dev.Mountpoint)
 		return
 	}
 
@@ -252,7 +231,6 @@ func addMountedVolume(dev LsblkDevice, mounted *[]LogicalVolume, mountedPaths ma
 		total = strconv.FormatUint(usage.Total, 10)
 		used = strconv.FormatUint(usage.Used, 10)
 	} else {
-		log.Printf("       [Warning] disk.Usage error for %s: %v", dev.Mountpoint, err)
 		total = dev.Size
 		used = "0"
 	}
@@ -274,8 +252,6 @@ func addMountedVolume(dev LsblkDevice, mounted *[]LogicalVolume, mountedPaths ma
 		Disks:      []string{dev.Kname},
 	}
 	*mounted = append(*mounted, vol)
-
-	log.Printf("       [Added] success: %+v", vol)
 }
 
 type MountRequest struct {

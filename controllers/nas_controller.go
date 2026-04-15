@@ -674,28 +674,69 @@ func UnmountDevice(c *fiber.Ctx) error {
 	c.Set("Transfer-Encoding", "chunked")
 
 	c.Context().SetBodyStreamWriter(func(w *bufio.Writer) {
-		fmt.Fprintf(w, "data: {\"step\":\"Unmounting %s...\", \"status\":\"loading\"}\n\n", target)
+		totalSteps := 3
+		currentStep := 1
+
+		// Step 1: Attempt normal unmount
+		fmt.Fprintf(w, "data: {\"step\":\"Step %d/%d: Attempting to unmount %s...\", \"status\":\"loading\", \"progress\":0, \"currentStep\":%d, \"totalSteps\":%d}\n\n", currentStep, totalSteps, target, currentStep, totalSteps)
 		w.Flush()
 		time.Sleep(500 * time.Millisecond)
 
-		// Run unmount command
 		cmd := exec.Command("sudo", "umount", target)
-		if output, err := cmd.CombinedOutput(); err != nil {
-			fmt.Fprintf(w, "data: {\"step\":\"Unmount failed: %s\", \"status\":\"error\"}\n\n", string(output))
+		output, err := cmd.CombinedOutput()
+
+		unmountSuccess := false
+		if err == nil {
+			unmountSuccess = true
+		} else {
+			errMsg := string(output)
+			// Check if target is busy - try lazy unmount
+			if strings.Contains(errMsg, "busy") || strings.Contains(errMsg, "Device or resource busy") {
+				currentStep = 2
+				fmt.Fprintf(w, "data: {\"step\":\"Step %d/%d: Mount point busy, attempting lazy unmount...\", \"status\":\"loading\", \"progress\":33, \"currentStep\":%d, \"totalSteps\":%d}\n\n", currentStep, totalSteps, currentStep, totalSteps)
+				w.Flush()
+				time.Sleep(500 * time.Millisecond)
+
+				// Try lazy unmount (-l flag defers unmount until resources are released)
+				cmd = exec.Command("sudo", "umount", "-l", target)
+				output, err = cmd.CombinedOutput()
+
+				if err == nil {
+					unmountSuccess = true
+				} else {
+					errMsg = string(output)
+					// Last resort: try force unmount
+					if strings.Contains(errMsg, "busy") || strings.Contains(errMsg, "Device or resource busy") {
+						currentStep = 2
+						fmt.Fprintf(w, "data: {\"step\":\"Step %d/%d: Lazy unmount failed, attempting force unmount...\", \"status\":\"loading\", \"progress\":33, \"currentStep\":%d, \"totalSteps\":%d}\n\n", currentStep, totalSteps, currentStep, totalSteps)
+						w.Flush()
+						time.Sleep(500 * time.Millisecond)
+
+						cmd = exec.Command("sudo", "umount", "-f", target)
+						output, err = cmd.CombinedOutput()
+						if err == nil {
+							unmountSuccess = true
+						}
+					}
+				}
+			}
+		}
+
+		if !unmountSuccess {
+			fmt.Fprintf(w, "data: {\"step\":\"Unmount failed: %s\", \"status\":\"error\"}\n\n", strings.TrimSpace(string(output)))
 			w.Flush()
 			return
 		}
 
-		fmt.Fprintf(w, "data: {\"step\":\"Cleaning up directories...\", \"status\":\"loading\"}\n\n")
+		// Step 3: Cleanup
+		currentStep = 3
+		fmt.Fprintf(w, "data: {\"step\":\"Step %d/%d: Cleaning up mount directories...\", \"status\":\"loading\", \"progress\":66, \"currentStep\":%d, \"totalSteps\":%d}\n\n", currentStep, totalSteps, currentStep, totalSteps)
 		w.Flush()
-		time.Sleep(300 * time.Millisecond)
-
-		// Optionally remove empty mount directory if it's in /mnt or /media
 		if strings.HasPrefix(target, "/mnt/") || strings.HasPrefix(target, "/media/") {
 			os.Remove(target) // Ignores error if directory is not empty
 		}
 
-		fmt.Fprintf(w, "data: {\"step\":\"Device unmounted successfully!\", \"status\":\"success\"}\n\n")
+		fmt.Fprintf(w, "data: {\"step\":\"✓ Device unmounted successfully!\", \"status\":\"success\", \"progress\":100, \"currentStep\":%d, \"totalSteps\":%d}\n\n", currentStep, totalSteps)
 		w.Flush()
 	})
 

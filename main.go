@@ -9,10 +9,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/logger"
+	websocket "github.com/gofiber/websocket/v2"
 )
 
 // checkSudoersConfig verifies that required commands are in sudoers
@@ -142,6 +144,125 @@ func startUDPDiscoveryListener() {
 	}()
 }
 
+// NotificationBroadcaster manages WebSocket connections and broadcasts notifications
+type NotificationBroadcaster struct {
+	clients    map[*websocket.Conn]bool
+	broadcast  chan notification
+	register   chan *websocket.Conn
+	unregister chan *websocket.Conn
+	mu         sync.RWMutex
+}
+
+type notification struct {
+	Type    string `json:"type"`
+	Title   string `json:"title"`
+	Body    string `json:"body"`
+	Message string `json:"message,omitempty"`
+}
+
+var websocketConfig = websocket.Config{
+	Origins: []string{"*"},
+}
+
+var notificationBroadcaster = &NotificationBroadcaster{
+	clients:    make(map[*websocket.Conn]bool),
+	broadcast:  make(chan notification, 256),
+	register:   make(chan *websocket.Conn),
+	unregister: make(chan *websocket.Conn),
+}
+
+// Start runs the notification broadcaster loop
+func (nb *NotificationBroadcaster) Start() {
+	go func() {
+		for {
+			select {
+			case client := <-nb.register:
+				nb.mu.Lock()
+				nb.clients[client] = true
+				nb.mu.Unlock()
+				log.Println("📡 Client connected to notifications")
+
+			case client := <-nb.unregister:
+				nb.mu.Lock()
+				if _, ok := nb.clients[client]; ok {
+					delete(nb.clients, client)
+					client.Close()
+				}
+				nb.mu.Unlock()
+				log.Println("📡 Client disconnected from notifications")
+
+			case notif := <-nb.broadcast:
+				nb.mu.RLock()
+				for client := range nb.clients {
+					go func(c *websocket.Conn) {
+						err := c.WriteJSON(notif)
+						if err != nil {
+							nb.unregister <- c
+						}
+					}(client)
+				}
+				nb.mu.RUnlock()
+			}
+		}
+	}()
+}
+
+// Broadcast sends a notification to all connected clients
+func (nb *NotificationBroadcaster) Broadcast(notif interface{}) {
+	// Handle both notification struct and map[string]interface{}
+	switch n := notif.(type) {
+	case notification:
+		select {
+		case nb.broadcast <- n:
+		default:
+			log.Println("⚠️  Broadcast channel full, notification dropped")
+		}
+	case map[string]interface{}:
+		// Convert map to notification
+		converted := notification{
+			Type:    toString(n["type"]),
+			Title:   toString(n["title"]),
+			Body:    toString(n["body"]),
+			Message: toString(n["message"]),
+		}
+		select {
+		case nb.broadcast <- converted:
+		default:
+			log.Println("⚠️  Broadcast channel full, notification dropped")
+		}
+	default:
+		log.Println("⚠️  Unknown notification type")
+	}
+}
+
+// toString safely converts interface{} to string
+func toString(val interface{}) string {
+	if s, ok := val.(string); ok {
+		return s
+	}
+	return ""
+}
+
+func handleWebSocketNotifications(c *websocket.Conn) {
+	notificationBroadcaster.register <- c
+
+	defer func() {
+		notificationBroadcaster.unregister <- c
+	}()
+
+	// Keep connection alive - listen for incoming messages (for ping/pong keeping connection alive)
+	for {
+		var msg notification
+		err := c.ReadJSON(&msg)
+		if err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				log.Printf("WebSocket error: %v", err)
+			}
+			break
+		}
+	}
+}
+
 func main() {
 	// Check and setup sudoers configuration
 	checkSudoersConfig()
@@ -158,6 +279,10 @@ func main() {
 	// Start UDP Discovery Listener
 	startUDPDiscoveryListener()
 
+	// Start Notification Broadcaster and connect to services package
+	notificationBroadcaster.Start()
+	services.SetNotificationBroadcaster(notificationBroadcaster)
+
 	// Initialize Fiber App
 	app := fiber.New()
 
@@ -173,6 +298,9 @@ func main() {
 
 	// Serve uploaded files statically
 	app.Static("/uploads", "./data/uploads")
+
+	// Setup WebSocket Notifications Endpoint
+	app.Get("/api/notifications/ws", websocket.New(handleWebSocketNotifications, websocketConfig))
 
 	// Setup Routes
 	routes.SetupSetup(app)

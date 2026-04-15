@@ -19,7 +19,18 @@ type NotificationEvent struct {
 var (
 	pendingNotifications []NotificationEvent
 	notifMutex           sync.Mutex
+	broadcaster          Broadcaster
 )
+
+// Broadcaster interface allows services to broadcast notifications
+type Broadcaster interface {
+	Broadcast(notif interface{})
+}
+
+// SetNotificationBroadcaster sets the broadcaster instance
+func SetNotificationBroadcaster(b Broadcaster) {
+	broadcaster = b
+}
 
 // PollNotifications serves pending notifications and clears the queue
 func PollNotifications(c *fiber.Ctx) error {
@@ -38,7 +49,7 @@ func PollNotifications(c *fiber.Ctx) error {
 	return c.JSON(toSend)
 }
 
-// NotifyFileMoved adds a notification to the pending queue
+// NotifyFileMoved broadcasts a file moved notification and adds to pending queue for polling fallback
 func NotifyFileMoved(filename, folder string) {
 	notifMutex.Lock()
 	defer notifMutex.Unlock()
@@ -50,10 +61,23 @@ func NotifyFileMoved(filename, folder string) {
 		Filename: filename,
 		Folder:   folder,
 	}
+
+	// Broadcast via WebSocket if available
+	if broadcaster != nil {
+		broadcaster.Broadcast(map[string]interface{}{
+			"type":     event.Type,
+			"title":    event.Title,
+			"body":     event.Body,
+			"filename": event.Filename,
+			"folder":   event.Folder,
+		})
+	}
+
+	// Also keep in pending queue for polling fallback
 	pendingNotifications = append(pendingNotifications, event)
 }
 
-// NotifyApprovalNeeded adds a notification when a file requires manual review.
+// NotifyApprovalNeeded broadcasts a notification when a file requires manual review.
 func NotifyApprovalNeeded(filename, suggestedFolder string) {
 	notifMutex.Lock()
 	defer notifMutex.Unlock()
@@ -65,5 +89,18 @@ func NotifyApprovalNeeded(filename, suggestedFolder string) {
 		Filename: filename,
 		Folder:   suggestedFolder,
 	}
+
+	// Broadcast via WebSocket if available
+	if broadcaster != nil {
+		broadcaster.Broadcast(map[string]interface{}{
+			"type":     event.Type,
+			"title":    event.Title,
+			"body":     event.Body,
+			"filename": event.Filename,
+			"folder":   event.Folder,
+		})
+	}
+
+	// Also keep in pending queue for polling fallback
 	pendingNotifications = append(pendingNotifications, event)
 }

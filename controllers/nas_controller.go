@@ -88,26 +88,21 @@ func GetStorageDevices(c *fiber.Ctx) error {
 			processDeviceTree(dev, &mounted, &unmounted, &hasMountedChild, mountedPaths)
 
 			// If neither the disk nor any children are mounted, it's an unmounted physical drive
-			// BUT: Only list it if it has partitions or a filesystem
-			// (skip raw unpartitioned disks that can't be mounted directly)
+			// List all unmounted disks (both raw disks and partitioned disks)
+			// Raw disks can be formatted using FormatAndMount endpoint
 			if dev.Mountpoint == "" && !hasMountedChild {
-				hasPartitions := len(dev.Children) > 0
-				hasFilesystem := dev.Fstype != ""
-
-				if hasPartitions || hasFilesystem {
-					unmounted = append(unmounted, PhysicalDisk{
-						ID:          dev.Kname,
-						DevicePath:  "/dev/" + dev.Kname,
-						Model:       strings.TrimSpace(dev.Vendor + " " + dev.Model),
-						Serial:      dev.Serial,
-						Size:        dev.Size,
-						Type:        "HDD", // Could detect SSD via /sys/block/.../rotational
-						Connection:  strings.ToUpper(dev.Tran),
-						Status:      "Healthy",
-						Temperature: 32, // Stub for now
-						Role:        "Unassigned",
-					})
-				}
+				unmounted = append(unmounted, PhysicalDisk{
+					ID:          dev.Kname,
+					DevicePath:  "/dev/" + dev.Kname,
+					Model:       strings.TrimSpace(dev.Vendor + " " + dev.Model),
+					Serial:      dev.Serial,
+					Size:        dev.Size,
+					Type:        "HDD", // Could detect SSD via /sys/block/.../rotational
+					Connection:  strings.ToUpper(dev.Tran),
+					Status:      "Healthy",
+					Temperature: 32, // Stub for now
+					Role:        "Unassigned",
+				})
 			}
 		} else if dev.Type == "raid1" || dev.Type == "raid0" || dev.Type == "raid5" {
 			// Handle virtual RAID devices directly

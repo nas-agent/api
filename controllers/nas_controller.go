@@ -1,8 +1,11 @@
 package controllers
 
 import (
+	"bufio"
 	"encoding/json"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -71,13 +74,14 @@ func GetStorageDevices(c *fiber.Ctx) error {
 
 	var mounted []LogicalVolume
 	var unmounted []PhysicalDisk
+	mountedPaths := make(map[string]bool) // Track already-added mount points
 
 	for _, dev := range lsblk.Blockdevices {
 		// Process each block device (disk, lvm, raid)
 		if dev.Type == "disk" {
 			// A disk might have partitions. We need to check if ANY of its children are mounted.
 			hasMountedChild := false
-			processDeviceTree(dev, &mounted, &unmounted, &hasMountedChild)
+			processDeviceTree(dev, &mounted, &unmounted, &hasMountedChild, mountedPaths)
 
 			// If neither the disk nor any children are mounted, it's an unmounted physical drive
 			if dev.Mountpoint == "" && !hasMountedChild {
@@ -97,7 +101,53 @@ func GetStorageDevices(c *fiber.Ctx) error {
 		} else if dev.Type == "raid1" || dev.Type == "raid0" || dev.Type == "raid5" {
 			// Handle virtual RAID devices directly
 			if dev.Mountpoint != "" {
-				addMountedVolume(dev, &mounted)
+				addMountedVolume(dev, &mounted, mountedPaths)
+			}
+		}
+	}
+
+	// Additionally, read /proc/mounts to capture all mounted filesystems
+	// This catches bind mounts, manually mounted directories, and other mounts not shown by lsblk
+	if file, err := os.Open("/proc/mounts"); err == nil {
+		defer file.Close()
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			line := scanner.Text()
+			parts := strings.Fields(line)
+			if len(parts) >= 6 {
+				device := parts[0]
+				mountPoint := parts[1]
+				fstype := parts[2]
+
+				// Skip system mounts and already-processed mounts
+				if shouldSkipMount(mountPoint) || mountedPaths[mountPoint] {
+					continue
+				}
+
+				// Skip if mountpoint doesn't exist
+				if _, err := os.Stat(mountPoint); err != nil {
+					continue
+				}
+
+				// Create a logical volume entry for this mount
+				usage, _ := disk.Usage(mountPoint)
+				name := filepath.Base(mountPoint)
+				if name == "" || name == "/" {
+					name = mountPoint
+				}
+
+				mounted = append(mounted, LogicalVolume{
+					ID:         strings.TrimPrefix(device, "/dev/"),
+					Name:       name,
+					MountPoint: mountPoint,
+					FileSystem: fstype,
+					RaidLevel:  "Single",
+					RaidState:  "Active",
+					TotalSize:  strconv.FormatUint(usage.Total, 10),
+					UsedSize:   strconv.FormatUint(usage.Used, 10),
+					Disks:      []string{strings.TrimPrefix(device, "/dev/")},
+				})
+				mountedPaths[mountPoint] = true
 			}
 		}
 	}
@@ -108,21 +158,54 @@ func GetStorageDevices(c *fiber.Ctx) error {
 	})
 }
 
+// shouldSkipMount checks if a mount point should be skipped
+func shouldSkipMount(mountPoint string) bool {
+	skipPaths := []string{
+		"/",
+		"/boot",
+		"/dev",
+		"/proc",
+		"/sys",
+		"/run",
+		"/tmp",
+		"/var",
+		"/usr",
+		"/etc",
+		"/lib",
+		"/bin",
+		"/sbin",
+		"/opt",
+		"/snap",
+	}
+
+	for _, skip := range skipPaths {
+		if mountPoint == skip || strings.HasPrefix(mountPoint, skip+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 // processDeviceTree recursively looks for mount points in partitions or logical volumes
-func processDeviceTree(dev LsblkDevice, mounted *[]LogicalVolume, unmounted *[]PhysicalDisk, hasMountedChild *bool) {
+func processDeviceTree(dev LsblkDevice, mounted *[]LogicalVolume, unmounted *[]PhysicalDisk, hasMountedChild *bool, mountedPaths map[string]bool) {
 	if dev.Mountpoint != "" {
 		*hasMountedChild = true
-		addMountedVolume(dev, mounted)
+		addMountedVolume(dev, mounted, mountedPaths)
 	}
 
 	for _, child := range dev.Children {
-		processDeviceTree(child, mounted, unmounted, hasMountedChild)
+		processDeviceTree(child, mounted, unmounted, hasMountedChild, mountedPaths)
 	}
 }
 
-func addMountedVolume(dev LsblkDevice, mounted *[]LogicalVolume) {
+func addMountedVolume(dev LsblkDevice, mounted *[]LogicalVolume, mountedPaths map[string]bool) {
 	// Skip system-critical paths that shouldn't be managed/shared easily
 	if dev.Mountpoint == "/" || dev.Mountpoint == "/boot" || strings.HasPrefix(dev.Mountpoint, "/boot/") {
+		return
+	}
+
+	// Skip if already added
+	if mountedPaths[dev.Mountpoint] {
 		return
 	}
 
@@ -153,4 +236,6 @@ func addMountedVolume(dev LsblkDevice, mounted *[]LogicalVolume) {
 		UsedSize:   used,
 		Disks:      []string{dev.Kname},
 	})
+
+	mountedPaths[dev.Mountpoint] = true
 }

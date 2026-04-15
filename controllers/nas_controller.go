@@ -1448,29 +1448,67 @@ func CreateRaid1(c *fiber.Ctx) error {
 		// Create partition on new disk matching existing disk
 		sendRaidEvent("progress", fmt.Sprintf("Creating partition on %s...", newDisk))
 
-		// Use sfdisk to clone partition table
-		getPartCmd := exec.Command("sudo", "sfdisk", "-d", existingDisk)
-		clonePartCmd := exec.Command("sudo", "sfdisk", newDisk)
+		// First, wipe the new disk to remove any existing partition table
+		wipeCmd := exec.Command("sudo", "wipefs", "-a", newDisk)
+		if out, err := wipeCmd.CombinedOutput(); err != nil {
+			// Log but continue - wipefs might fail if disk is new
+			log.Printf("[NAS] Warning: wipefs failed: %s", string(out))
+		}
 
-		partOutput, _ := getPartCmd.CombinedOutput()
-		clonePartCmd.Stdin = strings.NewReader(string(partOutput))
-		if err := clonePartCmd.Run(); err != nil {
-			sendRaidEvent("error", fmt.Sprintf("Failed to partition new disk: %v", err))
+		time.Sleep(1 * time.Second)
+
+		// Try using parted for more reliable partitioning
+		// Create a single partition using the entire disk
+		partCmd = exec.Command("sudo", "parted", "-s", newDisk, "mklabel", "msdos")
+		if out, err := partCmd.CombinedOutput(); err != nil {
+			sendRaidEvent("error", fmt.Sprintf("Failed to create partition table: %s", string(out)))
 			return
 		}
 
-		// Wait for device nodes
+		time.Sleep(1 * time.Second)
+
+		// Create single partition
+		partCreateCmd := exec.Command("sudo", "parted", "-s", newDisk, "mkpart", "primary", "ext4", "1MiB", "100%")
+		if out, err := partCreateCmd.CombinedOutput(); err != nil {
+			sendRaidEvent("error", fmt.Sprintf("Failed to create partition: %s", string(out)))
+			return
+		}
+
+		// Wait for device nodes to be created
 		time.Sleep(2 * time.Second)
+
+		// Verify partition was created
+		partListCmd := exec.Command("sudo", "lsblk", "-n", "-o", "NAME", newDisk)
+		listOut, _ := partListCmd.CombinedOutput()
+		log.Printf("[NAS] Partition list after creation:\n%s", string(listOut))
 
 		// Determine partition number (usually partition 1)
 		newDiskPart := newDisk + "1"
 
+		// Verify the partition exists
+		testPartCmd := exec.Command("sudo", "test", "-b", newDiskPart)
+		if err := testPartCmd.Run(); err != nil {
+			// Try partition 2 in case partition 1 is reserved
+			newDiskPart = newDisk + "2"
+			testPartCmd2 := exec.Command("sudo", "test", "-b", newDiskPart)
+			if err := testPartCmd2.Run(); err != nil {
+				sendRaidEvent("error", fmt.Sprintf("Partition not found at %s1 or %s2. Check disk at %s.", newDisk, newDisk, newDisk))
+				return
+			}
+		}
+
+		log.Printf("[NAS] Using partition: %s", newDiskPart)
+		sendRaidEvent("progress", fmt.Sprintf("Using partition %s for RAID", strings.TrimPrefix(newDiskPart, "/dev/")))
+
 		// Create RAID-1 array
-		sendRaidEvent("progress", fmt.Sprintf("Creating RAID-1 array md%d...", time.Now().UnixNano()%100))
+		sendRaidEvent("progress", fmt.Sprintf("Creating RAID-1 array with %s and %s...", existingDisk, newDiskPart))
 
 		raidName := fmt.Sprintf("md%d", time.Now().UnixNano()%1000)
-		mdadmCmd := exec.Command("sudo", "mdadm", "--create", "/dev/"+raidName, "--level", "1", "--raid-devices", "2", existingDisk, newDiskPart)
-		if out, err := mdadmCmd.CombinedOutput(); err != nil {
+		mdadmCmd := exec.Command("sudo", "mdadm", "--create", "/dev/"+raidName, "--level", "1", "--raid-devices", "2", "--force", existingDisk, newDiskPart)
+
+		out, err := mdadmCmd.CombinedOutput()
+		if err != nil {
+			log.Printf("[NAS] mdadm create output: %s", string(out))
 			sendRaidEvent("error", fmt.Sprintf("Failed to create RAID-1: %s", string(out)))
 			return
 		}

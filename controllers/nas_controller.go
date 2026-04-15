@@ -1513,8 +1513,9 @@ func CreateRaid1(c *fiber.Ctx) error {
 		sendRaidEvent("progress", fmt.Sprintf("Creating RAID-1 array with %s and %s...", existingDisk, newDiskPart))
 
 		raidName := fmt.Sprintf("md%d", time.Now().UnixNano()%1000)
-		// Use --bitmap=internal to avoid interactive prompts and --assume-clean to preserve data
-		mdadmCmd := exec.Command("sudo", "mdadm", "--create", "/dev/"+raidName, "--level", "1", "--raid-devices", "2", "--force", "--bitmap=internal", "--assume-clean", existingDisk, newDiskPart)
+		// Use --run to auto-answer prompts, --bitmap=internal for write-intent bitmap
+		// --assume-clean preserves existing data, --force overrides safety checks
+		mdadmCmd := exec.Command("sudo", "mdadm", "--create", "/dev/"+raidName, "--level", "1", "--raid-devices", "2", "--force", "--run", "--bitmap=internal", "--assume-clean", existingDisk, newDiskPart)
 
 		out, err := mdadmCmd.CombinedOutput()
 		if err != nil {

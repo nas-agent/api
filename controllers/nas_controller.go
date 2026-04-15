@@ -3,12 +3,14 @@ package controllers
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/shirou/gopsutil/v4/disk"
@@ -292,25 +294,47 @@ func MountDevice(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Device path is required"})
 	}
 
-	mountDir := req.MountDir
-	if mountDir == "" {
-		// default to /mnt/<device_name>
-		deviceName := filepath.Base(req.Device)
-		mountDir = "/mnt/" + deviceName
-	}
+	c.Set("Content-Type", "text/event-stream")
+	c.Set("Cache-Control", "no-cache")
+	c.Set("Connection", "keep-alive")
+	c.Set("Transfer-Encoding", "chunked")
 
-	// Create mount point if it doesn't exist
-	if err := os.MkdirAll(mountDir, 0755); err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to create mount directory: " + err.Error()})
-	}
+	c.Context().SetBodyStreamWriter(func(w *bufio.Writer) {
+		mountDir := req.MountDir
+		if mountDir == "" {
+			// default to /mnt/<device_name>
+			deviceName := filepath.Base(req.Device)
+			mountDir = "/mnt/" + deviceName
+		}
 
-	// Run mount command
-	cmd := exec.Command("sudo", "mount", req.Device, mountDir)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Mount failed: " + string(output)})
-	}
+		fmt.Fprintf(w, "data: {\"step\":\"Creating mount point %s...\", \"status\":\"loading\"}\n\n", mountDir)
+		w.Flush()
+		time.Sleep(500 * time.Millisecond) // realistic UX delay
 
-	return c.JSON(fiber.Map{"message": "Device mounted successfully", "mountPoint": mountDir})
+		// Create mount point if it doesn't exist
+		if err := os.MkdirAll(mountDir, 0755); err != nil {
+			fmt.Fprintf(w, "data: {\"step\":\"Failed to create directory: %v\", \"status\":\"error\"}\n\n", err)
+			w.Flush()
+			return
+		}
+
+		fmt.Fprintf(w, "data: {\"step\":\"Mounting device %s...\", \"status\":\"loading\"}\n\n", req.Device)
+		w.Flush()
+		time.Sleep(500 * time.Millisecond)
+
+		// Run mount command
+		cmd := exec.Command("sudo", "mount", req.Device, mountDir)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			fmt.Fprintf(w, "data: {\"step\":\"Mount failed: %s\", \"status\":\"error\"}\n\n", string(output))
+			w.Flush()
+			return
+		}
+
+		fmt.Fprintf(w, "data: {\"step\":\"Device mounted successfully!\", \"status\":\"success\", \"mountPoint\":\"%s\"}\n\n", mountDir)
+		w.Flush()
+	})
+
+	return nil
 }
 
 // UnmountDevice unmounts a block device or mount point
@@ -329,16 +353,36 @@ func UnmountDevice(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Device or MountDir is required"})
 	}
 
-	// Run unmount command
-	cmd := exec.Command("sudo", "umount", target)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Unmount failed: " + string(output)})
-	}
+	c.Set("Content-Type", "text/event-stream")
+	c.Set("Cache-Control", "no-cache")
+	c.Set("Connection", "keep-alive")
+	c.Set("Transfer-Encoding", "chunked")
 
-	// Optionally remove empty mount directory if it's in /mnt or /media
-	if strings.HasPrefix(target, "/mnt/") || strings.HasPrefix(target, "/media/") {
-		os.Remove(target) // Ignores error if directory is not empty
-	}
+	c.Context().SetBodyStreamWriter(func(w *bufio.Writer) {
+		fmt.Fprintf(w, "data: {\"step\":\"Unmounting %s...\", \"status\":\"loading\"}\n\n", target)
+		w.Flush()
+		time.Sleep(500 * time.Millisecond)
 
-	return c.JSON(fiber.Map{"message": "Device unmounted successfully"})
+		// Run unmount command
+		cmd := exec.Command("sudo", "umount", target)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			fmt.Fprintf(w, "data: {\"step\":\"Unmount failed: %s\", \"status\":\"error\"}\n\n", string(output))
+			w.Flush()
+			return
+		}
+
+		fmt.Fprintf(w, "data: {\"step\":\"Cleaning up directories...\", \"status\":\"loading\"}\n\n")
+		w.Flush()
+		time.Sleep(300 * time.Millisecond)
+
+		// Optionally remove empty mount directory if it's in /mnt or /media
+		if strings.HasPrefix(target, "/mnt/") || strings.HasPrefix(target, "/media/") {
+			os.Remove(target) // Ignores error if directory is not empty
+		}
+
+		fmt.Fprintf(w, "data: {\"step\":\"Device unmounted successfully!\", \"status\":\"success\"}\n\n")
+		w.Flush()
+	})
+
+	return nil
 }

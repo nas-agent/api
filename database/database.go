@@ -43,6 +43,7 @@ func ConnectDB() {
 		&models.Volume{},
 		&models.UserVolume{},
 		&models.Share{},
+		&models.RaidArray{},
 		// Phase 4A: Advanced Permissions
 		&models.UserGroup{},
 		&models.GroupMember{},

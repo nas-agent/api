@@ -61,6 +61,8 @@ func SetupSetup(app *fiber.App) {
 	api.Post("/nas/storage/format-and-mount", controllers.FormatAndMount)
 	api.Post("/nas/storage/unmount", controllers.UnmountDevice)
 	api.Post("/nas/storage/raid1", controllers.CreateRaid1)
+	api.Get("/nas/raid/arrays", controllers.GetRaidArrays)
+	api.Delete("/nas/raid/arrays/:raidName", controllers.DeleteRaidArray)
 	api.Get("/nas/volumes", controllers.GetVolumes)
 	api.Post("/nas/volumes", controllers.RegisterVolume)
 	api.Delete("/nas/volumes/:id", controllers.DeleteVolume)

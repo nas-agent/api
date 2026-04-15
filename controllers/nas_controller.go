@@ -82,6 +82,17 @@ func GetStorageDevices(c *fiber.Ctx) error {
 	var unmounted = make([]PhysicalDisk, 0)
 	mountedPaths := make(map[string]bool) // Track already-added mount points
 
+	// Get all RAID arrays to check if disks are used in RAID
+	var raidArrays []models.RaidArray
+	database.DB.Find(&raidArrays)
+
+	// Build a map of disk paths that are part of RAID arrays
+	raidDiskMap := make(map[string]bool)
+	for _, raid := range raidArrays {
+		raidDiskMap[raid.Disk1] = true
+		raidDiskMap[raid.Disk2] = true
+	}
+
 	for _, dev := range lsblk.Blockdevices {
 		// Process each block device (disk, lvm, raid)
 		if dev.Type == "disk" {
@@ -90,21 +101,28 @@ func GetStorageDevices(c *fiber.Ctx) error {
 			processDeviceTree(dev, &mounted, &unmounted, &hasMountedChild, mountedPaths)
 
 			// If neither the disk nor any children are mounted, it's an unmounted physical drive
+			// But skip disks that are part of RAID arrays
 			// List all unmounted disks (both raw disks and partitioned disks)
 			// Raw disks can be formatted using FormatAndMount endpoint
 			if dev.Mountpoint == "" && !hasMountedChild {
-				unmounted = append(unmounted, PhysicalDisk{
-					ID:          dev.Kname,
-					DevicePath:  "/dev/" + dev.Kname,
-					Model:       strings.TrimSpace(dev.Vendor + " " + dev.Model),
-					Serial:      dev.Serial,
-					Size:        dev.Size,
-					Type:        "HDD", // Could detect SSD via /sys/block/.../rotational
-					Connection:  strings.ToUpper(dev.Tran),
-					Status:      "Healthy",
-					Temperature: 32, // Stub for now
-					Role:        "Unassigned",
-				})
+				// Check if this disk is part of a RAID array
+				isPartOfRaid := raidDiskMap["/dev/"+dev.Kname]
+
+				// Only add to unmounted if it's NOT part of a RAID
+				if !isPartOfRaid {
+					unmounted = append(unmounted, PhysicalDisk{
+						ID:          dev.Kname,
+						DevicePath:  "/dev/" + dev.Kname,
+						Model:       strings.TrimSpace(dev.Vendor + " " + dev.Model),
+						Serial:      dev.Serial,
+						Size:        dev.Size,
+						Type:        "HDD", // Could detect SSD via /sys/block/.../rotational
+						Connection:  strings.ToUpper(dev.Tran),
+						Status:      "Healthy",
+						Temperature: 32, // Stub for now
+						Role:        "Unassigned",
+					})
+				}
 			}
 		} else if dev.Type == "raid1" || dev.Type == "raid0" || dev.Type == "raid5" {
 			// Handle virtual RAID devices directly
@@ -1537,8 +1555,8 @@ func CreateRaid1(c *fiber.Ctx) error {
 			return
 		}
 
-		// Create mdadm.conf entry
-		sendRaidEvent("progress", "Updating RAID configuration...")
+		// Update RAID configuration (don't send event - this is post-completion cleanup)
+		log.Printf("[NAS] Updating RAID configuration...")
 		examCmd := exec.Command("sudo", "mdadm", "--examine", "--scan")
 		confOutput, _ := examCmd.CombinedOutput()
 
@@ -1552,26 +1570,103 @@ func CreateRaid1(c *fiber.Ctx) error {
 		// Save RAID info to database
 		now := time.Now().Unix()
 		raidID := fmt.Sprintf("raid1_%d", now)
-		raidEntry := map[string]interface{}{
-			"id":          raidID,
-			"name":        req.Name,
-			"raid_level":  "RAID1",
-			"raid_name":   raidName,
-			"device_path": "/dev/" + raidName,
-			"status":      "active",
-			"disk1":       existingDisk,
-			"disk2":       newDiskPart,
-			"created_at":  now,
-			"updated_at":  now,
+		raidEntry := models.RaidArray{
+			ID:         raidID,
+			Name:       req.Name,
+			RaidLevel:  "RAID1",
+			RaidName:   raidName,
+			DevicePath: "/dev/" + raidName,
+			Status:     "active",
+			Disk1:      existingDisk,
+			Disk2:      newDiskPart,
+			CreatedAt:  now,
+			UpdatedAt:  now,
 		}
 
-		if err := database.DB.Table("raid_arrays").Create(raidEntry).Error; err != nil {
+		if err := database.DB.Create(&raidEntry).Error; err != nil {
 			log.Printf("[NAS] Error saving RAID to database: %v\n", err)
 			// RAID was created but DB insert failed - still return success
+		} else {
+			log.Printf("[NAS] RAID saved to database: %s", raidID)
+		}
+
+		// Remount the original disk back to its mount point
+		log.Printf("[NAS] Remounting %s to %s...", existingDisk, mountPoint)
+		remountCmd := exec.Command("sudo", "mount", existingDisk, mountPoint)
+		if out, err := remountCmd.CombinedOutput(); err != nil {
+			log.Printf("[NAS] Warning: Could not remount %s: %s", existingDisk, string(out))
+			// Don't fail here - RAID was created successfully
+		} else {
+			log.Printf("[NAS] Successfully remounted %s to %s", existingDisk, mountPoint)
 		}
 
 		sendRaidEvent("success", fmt.Sprintf("✓ RAID-1 array %s created successfully at /dev/%s. Mirror sync in progress.", req.Name, raidName))
 	})
 
 	return nil
+}
+
+// GetRaidArrays returns all RAID arrays from the database
+func GetRaidArrays(c *fiber.Ctx) error {
+	var raids []models.RaidArray
+	if err := database.DB.Find(&raids).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch RAID arrays"})
+	}
+
+	return c.JSON(raids)
+}
+
+// DeleteRaidArray stops and deletes a RAID array, then removes it from database
+func DeleteRaidArray(c *fiber.Ctx) error {
+	type DeleteRaidRequest struct {
+		RaidName string `json:"raidName"` // e.g., "md594"
+	}
+
+	var req DeleteRaidRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+
+	if req.RaidName == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "raidName is required"})
+	}
+
+	// Ensure raidName doesn't have /dev/ prefix for safety
+	raidName := strings.TrimPrefix(req.RaidName, "/dev/")
+
+	// Stop the RAID array
+	log.Printf("[NAS] Stopping RAID array: %s", raidName)
+	stopCmd := exec.Command("sudo", "mdadm", "--stop", "/dev/"+raidName)
+	if out, err := stopCmd.CombinedOutput(); err != nil {
+		log.Printf("[NAS] Warning: Failed to stop RAID array: %s", string(out))
+		// Continue anyway - might already be stopped
+	}
+
+	time.Sleep(1 * time.Second)
+
+	// Remove RAID array from mdadm.conf
+	log.Printf("[NAS] Removing RAID from mdadm.conf")
+	removeCmd := exec.Command("sh", "-c", fmt.Sprintf("sudo sed -i '/ARRAY.*%s/d' /etc/mdadm/mdadm.conf", raidName))
+	if out, err := removeCmd.CombinedOutput(); err != nil {
+		log.Printf("[NAS] Warning: Failed to remove from mdadm.conf: %s", string(out))
+	}
+
+	// Update initramfs
+	updateCmd := exec.Command("sudo", "update-initramfs", "-u")
+	if out, err := updateCmd.CombinedOutput(); err != nil {
+		log.Printf("[NAS] Warning: Failed to update initramfs: %s", string(out))
+	}
+
+	// Remove from database
+	log.Printf("[NAS] Removing RAID from database")
+	if err := database.DB.Where("raid_name = ?", raidName).Delete(&models.RaidArray{}).Error; err != nil {
+		log.Printf("[NAS] Error removing RAID from database: %v", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to remove RAID from database"})
+	}
+
+	log.Printf("[NAS] RAID array %s deleted successfully", raidName)
+	return c.JSON(fiber.Map{
+		"status":  "success",
+		"message": fmt.Sprintf("RAID array %s has been deleted", raidName),
+	})
 }

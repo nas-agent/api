@@ -60,10 +60,35 @@ func SetupSetup(app *fiber.App) {
 	api.Post("/nas/storage/mount", controllers.MountDevice)
 	api.Post("/nas/storage/format-and-mount", controllers.FormatAndMount)
 	api.Post("/nas/storage/unmount", controllers.UnmountDevice)
+	api.Get("/nas/volumes", controllers.GetVolumes)
+	api.Post("/nas/volumes", controllers.RegisterVolume)
+	api.Delete("/nas/volumes/:id", controllers.DeleteVolume)
+	api.Post("/nas/volumes/assign", controllers.AssignVolumeToUser)
+	api.Delete("/nas/volumes/:volumeId/users/:userId", controllers.RevokeVolumeFromUser)
+	api.Get("/nas/users/:userId/volumes", controllers.GetUserVolumes)
+	api.Get("/nas/volumes/:volumeId/users", controllers.GetVolumeUsers)
 	api.Get("/nas/network/interfaces", controllers.GetNetworkInterfaces)
+
+	// Share Management
 	api.Get("/nas/shares", controllers.GetShares)
 	api.Post("/nas/shares", controllers.CreateShare)
 	api.Delete("/nas/shares/:id", controllers.DeleteShare)
+
+	// Phase 4A: Advanced Permissions
+	api.Post("/nas/shares/permissions", controllers.SetSharePermission)
+	api.Get("/nas/shares/:shareId/permissions", controllers.GetSharePermissions)
+	api.Delete("/nas/permissions/:id", controllers.RevokeSharePermission)
+	api.Post("/nas/groups", controllers.CreateUserGroup)
+	api.Post("/nas/groups/members", controllers.AddUserToGroup)
+	api.Post("/nas/quotas", controllers.SetStorageQuota)
+
+	// Phase 4B: Volume Health & Monitoring
+	api.Get("/nas/volumes/:volumeId/health", controllers.GetVolumeHealth)
+	api.Get("/nas/volumes/:volumeId/alerts", controllers.GetVolumeAlerts)
+	api.Put("/nas/alerts/:id/resolve", controllers.ResolveAlert)
+	api.Post("/nas/volumes/:volumeId/cleanup-policy", controllers.SetCleanupPolicy)
+	api.Get("/nas/volumes/:volumeId/cleanup-policy", controllers.GetCleanupPolicy)
+
 	api.Get("/monitor", controllers.GetSystemStats)
 	api.Get("/users", controllers.GetUsers)
 	api.Delete("/users/:id", controllers.DeleteUser)

@@ -40,7 +40,18 @@ func ConnectDB() {
 		&models.FeedbackLog{},
 		&models.UserFolderProfile{},
 		&models.UserNamingProfile{},
+		&models.Volume{},
+		&models.UserVolume{},
 		&models.Share{},
+		// Phase 4A: Advanced Permissions
+		&models.UserGroup{},
+		&models.GroupMember{},
+		&models.SharePermission{},
+		&models.StorageQuota{},
+		// Phase 4B: Volume Health & Monitoring
+		&models.VolumeHealth{},
+		&models.VolumeAlert{},
+		&models.CleanupPolicy{},
 	)
 	if err != nil {
 		log.Fatal("Failed to auto-migrate database. \n", err)

@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"api/database"
 	"bufio"
 	"encoding/json"
 	"fmt"
@@ -411,6 +412,57 @@ func FormatAndMount(c *fiber.Ctx) error {
 		// Success!
 		sendProgress(w, fmt.Sprintf("Disk formatted and mounted successfully at %s!", mountDir), "success")
 		log.Printf("[NAS] Format and mount completed successfully\n")
+		time.Sleep(500 * time.Millisecond)
+
+		// Step 5: Register volume in database
+		sendProgress(w, "Registering volume in database...", "loading")
+
+		// Get disk usage information
+		dfCmd := exec.Command("df", "-B1", mountDir)
+		dfOutput, err := dfCmd.CombinedOutput()
+		if err != nil {
+			log.Printf("[NAS] Failed to get disk usage: %v\n", err)
+			sendProgress(w, "Warning: Could not retrieve disk size information", "warning")
+		}
+
+		var totalSize int64
+		var usedSize int64
+
+		if err == nil {
+			// Parse df output to get total and used sizes
+			lines := strings.Split(strings.TrimSpace(string(dfOutput)), "\n")
+			if len(lines) > 1 {
+				fields := strings.Fields(lines[1])
+				if len(fields) >= 3 {
+					if size, err := strconv.ParseInt(fields[1], 10, 64); err == nil {
+						totalSize = size
+					}
+					if size, err := strconv.ParseInt(fields[2], 10, 64); err == nil {
+						usedSize = size
+					}
+				}
+			}
+		}
+
+		// Create volume entry in database
+		volumeID := fmt.Sprintf("vol_%d", time.Now().UnixNano())
+		volume := map[string]interface{}{
+			"id":          volumeID,
+			"mount_point": mountDir,
+			"device_path": req.Device,
+			"file_system": req.FileSystem,
+			"total_size":  totalSize,
+			"used_size":   usedSize,
+			"status":      "Mounted",
+		}
+
+		if err := database.DB.Table("volumes").Create(volume).Error; err != nil {
+			log.Printf("[NAS] Error registering volume: %v\n", err)
+			sendProgress(w, "Warning: Volume mounted but could not persist to database", "warning")
+		} else {
+			log.Printf("[NAS] Volume registered in database with ID: %s\n", volumeID)
+			sendProgress(w, fmt.Sprintf("Volume registered with ID: %s", volumeID), "success")
+		}
 	})
 
 	return nil
@@ -551,4 +603,596 @@ func UnmountDevice(c *fiber.Ctx) error {
 	})
 
 	return nil
+}
+
+// GetVolumes retrieves all registered volumes from the database
+func GetVolumes(c *fiber.Ctx) error {
+	type VolumeResponse struct {
+		ID         string `json:"id"`
+		MountPoint string `json:"mount_point"`
+		DevicePath string `json:"device_path"`
+		FileSystem string `json:"file_system"`
+		TotalSize  int64  `json:"total_size"`
+		UsedSize   int64  `json:"used_size"`
+		Status     string `json:"status"`
+		CreatedAt  int64  `json:"created_at"`
+	}
+
+	var volumes []VolumeResponse
+
+	if err := database.DB.Table("volumes").Order("created_at DESC").Scan(&volumes).Error; err != nil {
+		log.Printf("[NAS] Error fetching volumes: %v\n", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch volumes"})
+	}
+
+	return c.JSON(volumes)
+}
+
+// RegisterVolume registers a newly mounted volume to the database
+func RegisterVolume(c *fiber.Ctx) error {
+	type VolumeRegistration struct {
+		MountPoint string `json:"mount_point"`
+		DevicePath string `json:"device_path"`
+		FileSystem string `json:"file_system"`
+		TotalSize  int64  `json:"total_size"`
+		UsedSize   int64  `json:"used_size"`
+	}
+
+	var req VolumeRegistration
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+
+	// Validate required fields
+	if req.MountPoint == "" || req.DevicePath == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "mount_point and device_path are required"})
+	}
+
+	// Check if volume already exists
+	var count int64
+	if err := database.DB.Table("volumes").Where("mount_point = ? OR device_path = ?", req.MountPoint, req.DevicePath).Count(&count).Error; err != nil {
+		log.Printf("[NAS] Error checking existing volume: %v\n", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to check existing volumes"})
+	}
+
+	if count > 0 {
+		return c.Status(409).JSON(fiber.Map{"error": "Volume already registered"})
+	}
+
+	// Generate unique ID (using UUID library would be better, but this works for now)
+	volumeID := fmt.Sprintf("vol_%d", time.Now().UnixNano())
+
+	// Create new volume
+	volume := map[string]interface{}{
+		"id":          volumeID,
+		"mount_point": req.MountPoint,
+		"device_path": req.DevicePath,
+		"file_system": req.FileSystem,
+		"total_size":  req.TotalSize,
+		"used_size":   req.UsedSize,
+		"status":      "Mounted",
+	}
+
+	if err := database.DB.Table("volumes").Create(volume).Error; err != nil {
+		log.Printf("[NAS] Error registering volume: %v\n", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to register volume"})
+	}
+
+	log.Printf("[NAS] Volume registered: %s at %s\n", req.DevicePath, req.MountPoint)
+	return c.Status(201).JSON(volume)
+}
+
+// DeleteVolume removes a volume registration from the database
+func DeleteVolume(c *fiber.Ctx) error {
+	volumeID := c.Params("id")
+	if volumeID == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Volume ID is required"})
+	}
+
+	// Check if volume is referenced by any shares
+	var shareCount int64
+	if err := database.DB.Table("shares").Where("volume_id = ?", volumeID).Count(&shareCount).Error; err != nil {
+		log.Printf("[NAS] Error checking shares: %v\n", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to check shares"})
+	}
+
+	if shareCount > 0 {
+		return c.Status(409).JSON(fiber.Map{"error": fmt.Sprintf("Cannot delete volume: %d shares are using this volume", shareCount)})
+	}
+
+	// Delete the volume
+	if err := database.DB.Table("volumes").Where("id = ?", volumeID).Delete(map[string]interface{}{}).Error; err != nil {
+		log.Printf("[NAS] Error deleting volume: %v\n", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete volume"})
+	}
+
+	log.Printf("[NAS] Volume deleted: %s\n", volumeID)
+	return c.Status(200).JSON(fiber.Map{"message": "Volume deleted successfully"})
+}
+
+// AssignVolumeToUser assigns a volume to a user (admin-only)
+func AssignVolumeToUser(c *fiber.Ctx) error {
+	type AssignVolumeRequest struct {
+		UserID          string `json:"user_id"`
+		VolumeID        string `json:"volume_id"`
+		PermissionLevel string `json:"permission_level"`
+	}
+
+	var req AssignVolumeRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+
+	if req.UserID == "" || req.VolumeID == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "user_id and volume_id are required"})
+	}
+
+	if req.PermissionLevel == "" {
+		req.PermissionLevel = "ReadWrite"
+	}
+
+	// Validate user exists
+	var userCount int64
+	if err := database.DB.Table("users").Where("id = ?", req.UserID).Count(&userCount).Error; err != nil || userCount == 0 {
+		return c.Status(404).JSON(fiber.Map{"error": "User not found"})
+	}
+
+	// Validate volume exists
+	var volumeCount int64
+	if err := database.DB.Table("volumes").Where("id = ?", req.VolumeID).Count(&volumeCount).Error; err != nil || volumeCount == 0 {
+		return c.Status(404).JSON(fiber.Map{"error": "Volume not found"})
+	}
+
+	// Check if assignment already exists
+	var existingCount int64
+	if err := database.DB.Table("user_volumes").Where("user_id = ? AND volume_id = ?", req.UserID, req.VolumeID).Count(&existingCount).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to check existing assignment"})
+	}
+
+	if existingCount > 0 {
+		// Update existing assignment
+		if err := database.DB.Table("user_volumes").Where("user_id = ? AND volume_id = ?", req.UserID, req.VolumeID).Update("permission_level", req.PermissionLevel).Error; err != nil {
+			log.Printf("[NAS] Error updating volume assignment: %v\n", err)
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to update assignment"})
+		}
+	} else {
+		// Create new assignment
+		userVolumeID := fmt.Sprintf("uv_%d", time.Now().UnixNano())
+		assignment := map[string]interface{}{
+			"id":               userVolumeID,
+			"user_id":          req.UserID,
+			"volume_id":        req.VolumeID,
+			"permission_level": req.PermissionLevel,
+		}
+
+		if err := database.DB.Table("user_volumes").Create(assignment).Error; err != nil {
+			log.Printf("[NAS] Error creating volume assignment: %v\n", err)
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to assign volume"})
+		}
+	}
+
+	log.Printf("[NAS] Volume %s assigned to user %s with permission %s\n", req.VolumeID, req.UserID, req.PermissionLevel)
+	return c.Status(201).JSON(fiber.Map{"message": "Volume assigned successfully"})
+}
+
+// RevokeVolumeFromUser removes volume access from a user (admin-only)
+func RevokeVolumeFromUser(c *fiber.Ctx) error {
+	userID := c.Params("userId")
+	volumeID := c.Params("volumeId")
+
+	if userID == "" || volumeID == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "User ID and Volume ID are required"})
+	}
+
+	if err := database.DB.Table("user_volumes").Where("user_id = ? AND volume_id = ?", userID, volumeID).Delete(map[string]interface{}{}).Error; err != nil {
+		log.Printf("[NAS] Error revoking volume access: %v\n", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to revoke access"})
+	}
+
+	log.Printf("[NAS] Volume %s revoked from user %s\n", volumeID, userID)
+	return c.Status(200).JSON(fiber.Map{"message": "Access revoked successfully"})
+}
+
+// GetUserVolumes retrieves all volumes accessible to a specific user
+func GetUserVolumes(c *fiber.Ctx) error {
+	userID := c.Params("userId")
+	if userID == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "User ID is required"})
+	}
+
+	type VolumeAccess struct {
+		ID              string `json:"id"`
+		MountPoint      string `json:"mount_point"`
+		DevicePath      string `json:"device_path"`
+		FileSystem      string `json:"file_system"`
+		TotalSize       int64  `json:"total_size"`
+		UsedSize        int64  `json:"used_size"`
+		Status          string `json:"status"`
+		PermissionLevel string `json:"permission_level"`
+		CreatedAt       int64  `json:"created_at"`
+	}
+
+	var volumes []VolumeAccess
+
+	err := database.DB.Table("volumes").
+		Select("volumes.id, volumes.mount_point, volumes.device_path, volumes.file_system, volumes.total_size, volumes.used_size, volumes.status, user_volumes.permission_level, volumes.created_at").
+		Joins("INNER JOIN user_volumes ON volumes.id = user_volumes.volume_id").
+		Where("user_volumes.user_id = ?", userID).
+		Order("volumes.created_at DESC").
+		Scan(&volumes).Error
+
+	if err != nil {
+		log.Printf("[NAS] Error fetching user volumes: %v\n", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch volumes"})
+	}
+
+	return c.JSON(volumes)
+}
+
+// GetVolumeUsers retrieves all users with access to a specific volume (admin-only)
+func GetVolumeUsers(c *fiber.Ctx) error {
+	volumeID := c.Params("volumeId")
+	if volumeID == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Volume ID is required"})
+	}
+
+	type UserAccess struct {
+		UserID          string `json:"user_id"`
+		Username        string `json:"username"`
+		Email           string `json:"email"`
+		PermissionLevel string `json:"permission_level"`
+		AssignedAt      int64  `json:"assigned_at"`
+	}
+
+	var users []UserAccess
+
+	err := database.DB.Table("users").
+		Select("users.id as user_id, users.username, users.email, user_volumes.permission_level, user_volumes.created_at as assigned_at").
+		Joins("INNER JOIN user_volumes ON users.id = user_volumes.user_id").
+		Where("user_volumes.volume_id = ?", volumeID).
+		Order("users.username ASC").
+		Scan(&users).Error
+
+	if err != nil {
+		log.Printf("[NAS] Error fetching volume users: %v\n", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch users"})
+	}
+
+	return c.JSON(users)
+}
+
+// ===== PHASE 4A: ADVANCED PERMISSIONS =====
+
+// SetSharePermission assigns permission to user/group for a specific share
+func SetSharePermission(c *fiber.Ctx) error {
+	type PermissionRequest struct {
+		ShareID         string `json:"share_id"`
+		UserID          string `json:"user_id"`
+		GroupID         string `json:"group_id"`
+		PermissionLevel string `json:"permission_level"`
+		CanShare        bool   `json:"can_share"`
+	}
+
+	var req PermissionRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+
+	if req.ShareID == "" || (req.UserID == "" && req.GroupID == "") {
+		return c.Status(400).JSON(fiber.Map{"error": "share_id and either user_id or group_id required"})
+	}
+
+	permissionID := fmt.Sprintf("perm_%d", time.Now().UnixNano())
+	permission := map[string]interface{}{
+		"id":               permissionID,
+		"share_id":         req.ShareID,
+		"user_id":          req.UserID,
+		"group_id":         req.GroupID,
+		"permission_level": req.PermissionLevel,
+		"can_share":        req.CanShare,
+	}
+
+	if err := database.DB.Table("share_permissions").Create(permission).Error; err != nil {
+		log.Printf("[NAS] Error setting share permission: %v\n", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to set permission"})
+	}
+
+	return c.Status(201).JSON(permission)
+}
+
+// GetSharePermissions retrieves all permissions for a share
+func GetSharePermissions(c *fiber.Ctx) error {
+	shareID := c.Params("shareId")
+	if shareID == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Share ID is required"})
+	}
+
+	type ShareAccess struct {
+		ID              string `json:"id"`
+		UserID          string `json:"user_id"`
+		Username        string `json:"username"`
+		GroupID         string `json:"group_id"`
+		GroupName       string `json:"group_name"`
+		PermissionLevel string `json:"permission_level"`
+		CanShare        bool   `json:"can_share"`
+	}
+
+	var permissions []ShareAccess
+
+	err := database.DB.Table("share_permissions").
+		Select("share_permissions.id, share_permissions.user_id, users.username, share_permissions.group_id, user_groups.name as group_name, share_permissions.permission_level, share_permissions.can_share").
+		Joins("LEFT JOIN users ON share_permissions.user_id = users.id").
+		Joins("LEFT JOIN user_groups ON share_permissions.group_id = user_groups.id").
+		Where("share_permissions.share_id = ?", shareID).
+		Scan(&permissions).Error
+
+	if err != nil {
+		log.Printf("[NAS] Error fetching share permissions: %v\n", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch permissions"})
+	}
+
+	return c.JSON(permissions)
+}
+
+// RevokeSharePermission removes permission to a share
+func RevokeSharePermission(c *fiber.Ctx) error {
+	permissionID := c.Params("id")
+	if permissionID == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Permission ID is required"})
+	}
+
+	if err := database.DB.Table("share_permissions").Where("id = ?", permissionID).Delete(map[string]interface{}{}).Error; err != nil {
+		log.Printf("[NAS] Error revoking share permission: %v\n", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to revoke permission"})
+	}
+
+	return c.Status(200).JSON(fiber.Map{"message": "Permission revoked successfully"})
+}
+
+// CreateUserGroup creates a new user group
+func CreateUserGroup(c *fiber.Ctx) error {
+	type GroupRequest struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+
+	var req GroupRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+
+	if req.Name == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Group name is required"})
+	}
+
+	groupID := fmt.Sprintf("grp_%d", time.Now().UnixNano())
+	group := map[string]interface{}{
+		"id":          groupID,
+		"name":        req.Name,
+		"description": req.Description,
+	}
+
+	if err := database.DB.Table("user_groups").Create(group).Error; err != nil {
+		log.Printf("[NAS] Error creating group: %v\n", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to create group"})
+	}
+
+	return c.Status(201).JSON(group)
+}
+
+// AddUserToGroup adds a user to a group
+func AddUserToGroup(c *fiber.Ctx) error {
+	type MemberRequest struct {
+		GroupID string `json:"group_id"`
+		UserID  string `json:"user_id"`
+	}
+
+	var req MemberRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+
+	memberID := fmt.Sprintf("mem_%d", time.Now().UnixNano())
+	member := map[string]interface{}{
+		"id":       memberID,
+		"group_id": req.GroupID,
+		"user_id":  req.UserID,
+	}
+
+	if err := database.DB.Table("group_members").Create(member).Error; err != nil {
+		log.Printf("[NAS] Error adding user to group: %v\n", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to add user to group"})
+	}
+
+	return c.Status(201).JSON(member)
+}
+
+// SetStorageQuota sets quota limit for user or share
+func SetStorageQuota(c *fiber.Ctx) error {
+	type QuotaRequest struct {
+		UserID           string `json:"user_id"`
+		ShareID          string `json:"share_id"`
+		MaxBytes         int64  `json:"max_bytes"`
+		WarningThreshold int    `json:"warning_threshold"`
+	}
+
+	var req QuotaRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+
+	if (req.UserID == "" && req.ShareID == "") || req.MaxBytes == 0 {
+		return c.Status(400).JSON(fiber.Map{"error": "Either user_id or share_id, and max_bytes required"})
+	}
+
+	quotaID := fmt.Sprintf("quota_%d", time.Now().UnixNano())
+	quota := map[string]interface{}{
+		"id":                quotaID,
+		"user_id":           req.UserID,
+		"share_id":          req.ShareID,
+		"max_bytes":         req.MaxBytes,
+		"warning_threshold": req.WarningThreshold,
+	}
+
+	if err := database.DB.Table("storage_quotas").Create(quota).Error; err != nil {
+		log.Printf("[NAS] Error setting quota: %v\n", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to set quota"})
+	}
+
+	return c.Status(201).JSON(quota)
+}
+
+// ===== PHASE 4B: VOLUME HEALTH & MONITORING =====
+
+// GetVolumeHealth retrieves health status for a volume
+func GetVolumeHealth(c *fiber.Ctx) error {
+	volumeID := c.Params("volumeId")
+	if volumeID == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Volume ID is required"})
+	}
+
+	type HealthStatus struct {
+		ID              string  `json:"id"`
+		Status          string  `json:"status"`
+		Temperature     float32 `json:"temperature"`
+		UsedSpace       int64   `json:"used_space"`
+		TotalSpace      int64   `json:"total_space"`
+		PercentageUsed  float64 `json:"percentage_used"`
+		ErrorCount      int     `json:"error_count"`
+		SMARTScore      int     `json:"smart_score"`
+		LastCheckTime   int64   `json:"last_check_time"`
+		ReadsPerSecond  int     `json:"reads_per_second"`
+		WritesPerSecond int     `json:"writes_per_second"`
+	}
+
+	var health HealthStatus
+
+	err := database.DB.Table("volume_healths").
+		Where("volume_id = ?", volumeID).
+		Order("created_at DESC").
+		Limit(1).
+		Scan(&health).Error
+
+	if err != nil {
+		log.Printf("[NAS] Error fetching volume health: %v\n", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch health status"})
+	}
+
+	// Calculate percentage used
+	if health.TotalSpace > 0 {
+		health.PercentageUsed = (float64(health.UsedSpace) / float64(health.TotalSpace)) * 100
+	}
+
+	return c.JSON(health)
+}
+
+// GetVolumeAlerts retrieves recent alerts for a volume
+func GetVolumeAlerts(c *fiber.Ctx) error {
+	volumeID := c.Params("volumeId")
+	if volumeID == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Volume ID is required"})
+	}
+
+	severityFilter := c.Query("severity")
+	unresolvedOnly := c.QueryBool("unresolved", false)
+
+	var alerts []map[string]interface{}
+
+	query := database.DB.Table("volume_alerts").Where("volume_id = ?", volumeID)
+
+	if severityFilter != "" {
+		query = query.Where("severity = ?", severityFilter)
+	}
+
+	if unresolvedOnly {
+		query = query.Where("resolved = ?", false)
+	}
+
+	err := query.Order("created_at DESC").Limit(100).Scan(&alerts).Error
+
+	if err != nil {
+		log.Printf("[NAS] Error fetching alerts: %v\n", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch alerts"})
+	}
+
+	return c.JSON(alerts)
+}
+
+// ResolveAlert marks an alert as resolved
+func ResolveAlert(c *fiber.Ctx) error {
+	alertID := c.Params("id")
+	if alertID == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Alert ID is required"})
+	}
+
+	if err := database.DB.Table("volume_alerts").
+		Where("id = ?", alertID).
+		Updates(map[string]interface{}{
+			"resolved":    true,
+			"resolved_at": time.Now().Unix(),
+		}).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to resolve alert"})
+	}
+
+	return c.JSON(fiber.Map{"message": "Alert resolved"})
+}
+
+// SetCleanupPolicy configures automatic cleanup for a volume
+func SetCleanupPolicy(c *fiber.Ctx) error {
+	type PolicyRequest struct {
+		VolumeID             string `json:"volume_id"`
+		Enabled              bool   `json:"enabled"`
+		TriggerThreshold     int    `json:"trigger_threshold"`
+		MaxCleanupPercentage int    `json:"max_cleanup_percentage"`
+		Action               string `json:"action"`
+		FileAgeThresholdDays int    `json:"file_age_threshold_days"`
+		ExcludePatterns      string `json:"exclude_patterns"`
+	}
+
+	var req PolicyRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+
+	policyID := fmt.Sprintf("policy_%d", time.Now().UnixNano())
+	policy := map[string]interface{}{
+		"id":                      policyID,
+		"volume_id":               req.VolumeID,
+		"enabled":                 req.Enabled,
+		"trigger_threshold":       req.TriggerThreshold,
+		"max_cleanup_percentage":  req.MaxCleanupPercentage,
+		"action":                  req.Action,
+		"file_age_threshold_days": req.FileAgeThresholdDays,
+		"exclude_patterns":        req.ExcludePatterns,
+	}
+
+	if err := database.DB.Table("cleanup_policies").Create(policy).Error; err != nil {
+		log.Printf("[NAS] Error setting cleanup policy: %v\n", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to set policy"})
+	}
+
+	return c.Status(201).JSON(policy)
+}
+
+// GetCleanupPolicy retrieves cleanup policy for a volume
+func GetCleanupPolicy(c *fiber.Ctx) error {
+	volumeID := c.Params("volumeId")
+	if volumeID == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Volume ID is required"})
+	}
+
+	var policy map[string]interface{}
+
+	err := database.DB.Table("cleanup_policies").
+		Where("volume_id = ?", volumeID).
+		Order("created_at DESC").
+		Limit(1).
+		Scan(&policy).Error
+
+	if err != nil {
+		log.Printf("[NAS] Error fetching cleanup policy: %v\n", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch policy"})
+	}
+
+	return c.JSON(policy)
 }

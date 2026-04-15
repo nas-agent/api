@@ -290,17 +290,34 @@ type FormatAndMountRequest struct {
 
 // isSystemDisk checks if a device is the root/system disk
 func isSystemDisk(device string) bool {
-	// Check root mounts
-	lsblkCmd := exec.Command("lsblk", "-n", "-o", "MOUNTPOINT", device)
-	output, _ := lsblkCmd.CombinedOutput()
-	mounts := string(output)
+	// Method 1: Check if device matches the root filesystem
+	rootCmd := exec.Command("df", "/")
+	output, _ := rootCmd.CombinedOutput()
+	if strings.Contains(string(output), device) {
+		return true
+	}
 
+	// Method 2: Check if partitions of this device are mounted at critical paths
+	// Normalize device name (e.g., /dev/sda -> sda)
+	devName := strings.TrimPrefix(device, "/dev/")
+	
+	mountCmd := exec.Command("mount")
+	mountOutput, _ := mountCmd.CombinedOutput()
+	mountLines := strings.Split(string(mountOutput), "\n")
+	
 	systemPaths := []string{"/", "/boot", "/usr", "/var", "/etc", "/sys", "/proc", "/dev", "/tmp"}
-	for _, path := range systemPaths {
-		if strings.Contains(mounts, path) {
-			return true
+	
+	for _, line := range mountLines {
+		// Look for lines containing the device
+		if strings.Contains(line, devName) {
+			for _, sysPath := range systemPaths {
+				if strings.Contains(line, " on "+sysPath+" ") {
+					return true
+				}
+			}
 		}
 	}
+	
 	return false
 }
 
@@ -326,10 +343,62 @@ func forceStopDevice(device string, maxRetries int) error {
 	return fmt.Errorf("device still busy after %d attempts", maxRetries)
 }
 
-// FormatAndMount formats a disk and mounts it persistently
-// Steps:
-// 1. Validate device and unmount existing mounts
-// 2. Force-stop processes and wipe filesystem
+// detectRaidArrays finds all RAID arrays currently active on the system
+// Returns a map of device -> RAID array name
+func detectRaidArrays() map[string]string {
+	raidMap := make(map[string]string)
+	
+	// Use mdadm to query all active RAID arrays
+	mdadmCmd := exec.Command("sudo", "mdadm", "--query", "--export")
+	output, _ := mdadmCmd.CombinedOutput()
+	
+	// Parse mdadm output
+	lines := strings.Split(string(output), "\n")
+	for _, line := range lines {
+		if strings.Contains(line, "MD_DEVS=") {
+			// Extract device list from MD_DEVS field
+			parts := strings.Split(line, "=")
+			if len(parts) == 2 {
+				devs := strings.Fields(parts[1])
+				// All devices in this RAID array
+				for _, dev := range devs {
+					raidMap[strings.TrimSpace(dev)] = "active_raid"
+				}
+			}
+		}
+	}
+	
+	// Alternative: Check using lsblk for md device children
+	// This catches RAID arrays more reliably
+	lsblkCmd := exec.Command("lsblk", "-J", "-n", "-o", "NAME,TYPE")
+	lsblkOutput, _ := lsblkCmd.CombinedOutput()
+	
+	var lsblkData map[string]interface{}
+	_ = json.Unmarshal(lsblkOutput, &lsblkData)
+	
+	// Check each device for md children
+	if blockdevices, ok := lsblkData["blockdevices"].([]interface{}); ok {
+		for _, bd := range blockdevices {
+			if bdMap, ok := bd.(map[string]interface{}); ok {
+				// Check if has raid child
+				if children, ok := bdMap["children"].([]interface{}); ok {
+					for _, child := range children {
+						if childMap, ok := child.(map[string]interface{}); ok {
+							if childType, ok := childMap["type"].(string); ok && childType == "raid" {
+								// Parent device has a raid child, mark it
+								if name, ok := bdMap["name"].(string); ok {
+									raidMap["/dev/"+name] = "has_raid_child"
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	return raidMap
+}
 // 3. Format to specified filesystem (default ext4)
 // 4. Create mount directory and mount
 // 5. Get UUID and add to /etc/fstab for persistence
@@ -391,8 +460,26 @@ func FormatAndMount(c *fiber.Ctx) error {
 		}
 	}
 
-	// For raw disks, we'll use the whole disk
-	log.Printf("[NAS] Preparing to format device: %s\n", req.Device)
+	// **NEW**: Check for active RAID arrays on the system itself
+	log.Printf("[NAS] Checking for active RAID arrays on the system...\n")
+	activeRaids := detectRaidArrays()
+	if len(activeRaids) > 0 {
+		log.Printf("[NAS] Found %d active RAID arrays\n", len(activeRaids))
+		
+		// Normalize device name for comparison (e.g., /dev/sda -> sda)
+		devName := strings.TrimPrefix(req.Device, "/dev/")
+		
+		for raidDev, raidStatus := range activeRaids {
+			raidDevName := strings.TrimPrefix(raidDev, "/dev/")
+			// Check if requested device is in any active RAID
+			if strings.HasPrefix(raidDevName, devName) || strings.HasPrefix(devName, strings.Split(raidDevName, "p")[0]) {
+				log.Printf("[NAS] ⛔ Device %s is part of active RAID array (%s: %s)\n", req.Device, raidDev, raidStatus)
+				return c.Status(409).JSON(fiber.Map{
+					"error": fmt.Sprintf("Device %s is currently part of an active RAID array. You must remove the RAID array first using 'mdadm' before formatting this disk.", req.Device),
+				})
+			}
+		}
+	}
 
 	// Default to ext4
 	if req.FileSystem == "" {
@@ -442,24 +529,26 @@ func FormatAndMount(c *fiber.Ctx) error {
 		// Step 2: Format
 		currentStep = 2
 		sendProgress(w, fmt.Sprintf("Step %d/%d: Formatting %s to %s...", currentStep, totalSteps, req.Device, req.FileSystem), "loading", currentStep, totalSteps)
-		var formatCmd *exec.Cmd
-		switch req.FileSystem {
-		case "ext4":
-			formatCmd = exec.Command("sudo", "mkfs.ext4", "-F", req.Device)
-		case "ext3":
-			formatCmd = exec.Command("sudo", "mkfs.ext3", "-F", req.Device)
-		case "ntfs":
-			formatCmd = exec.Command("sudo", "mkfs.ntfs", "-f", req.Device)
-		case "vfat":
-			formatCmd = exec.Command("sudo", "mkfs.vfat", "-F", "32", req.Device)
-		default:
-			sendProgress(w, fmt.Sprintf("Unsupported filesystem: %s", req.FileSystem), "error", currentStep, totalSteps)
-			return
-		}
 
 		// Retry formatting up to 3 times with delay
 		formatSuccess := false
 		for attempt := 1; attempt <= 3; attempt++ {
+			// Create new command for each attempt (can't reuse exec.Cmd)
+			var formatCmd *exec.Cmd
+			switch req.FileSystem {
+			case "ext4":
+				formatCmd = exec.Command("sudo", "mkfs.ext4", "-F", req.Device)
+			case "ext3":
+				formatCmd = exec.Command("sudo", "mkfs.ext3", "-F", req.Device)
+			case "ntfs":
+				formatCmd = exec.Command("sudo", "mkfs.ntfs", "-f", req.Device)
+			case "vfat":
+				formatCmd = exec.Command("sudo", "mkfs.vfat", "-F", "32", req.Device)
+			default:
+				sendProgress(w, fmt.Sprintf("Unsupported filesystem: %s", req.FileSystem), "error", currentStep, totalSteps)
+				return
+			}
+
 			if output, err := formatCmd.CombinedOutput(); err != nil {
 				if attempt < 3 {
 					log.Printf("[NAS] Format attempt %d failed (retrying): %v, output: %s\n", attempt, err, string(output))

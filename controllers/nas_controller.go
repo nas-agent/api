@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"api/database"
+	"api/models"
 	"bufio"
 	"encoding/json"
 	"fmt"
@@ -728,12 +729,23 @@ func UnmountDevice(c *fiber.Ctx) error {
 			return
 		}
 
-		// Step 3: Cleanup
+		// Step 3: Cleanup and update database
 		currentStep = 3
 		fmt.Fprintf(w, "data: {\"step\":\"Step %d/%d: Cleaning up mount directories...\", \"status\":\"loading\", \"progress\":66, \"currentStep\":%d, \"totalSteps\":%d}\n\n", currentStep, totalSteps, currentStep, totalSteps)
 		w.Flush()
+		time.Sleep(300 * time.Millisecond)
+
+		// Remove mount directory if in /mnt or /media
 		if strings.HasPrefix(target, "/mnt/") || strings.HasPrefix(target, "/media/") {
 			os.Remove(target) // Ignores error if directory is not empty
+		}
+
+		// Update database: mark volume as unmounted
+		if err := database.DB.Model(&models.Volume{}).
+			Where("mount_point = ?", target).
+			Update("status", models.VolumeStatusUnmounted).Error; err != nil {
+			fmt.Fprintf(w, "data: {\"step\":\"⚠️ Device unmounted but database update failed\", \"status\":\"warning\"}\n\n")
+			w.Flush()
 		}
 
 		fmt.Fprintf(w, "data: {\"step\":\"✓ Device unmounted successfully!\", \"status\":\"success\", \"progress\":100, \"currentStep\":%d, \"totalSteps\":%d}\n\n", currentStep, totalSteps)
@@ -743,7 +755,7 @@ func UnmountDevice(c *fiber.Ctx) error {
 	return nil
 }
 
-// GetVolumes retrieves all registered volumes from the database
+// GetVolumes retrieves all registered mounted volumes from the database
 func GetVolumes(c *fiber.Ctx) error {
 	type VolumeResponse struct {
 		ID         string `json:"id"`
@@ -758,7 +770,11 @@ func GetVolumes(c *fiber.Ctx) error {
 
 	volumes := []*VolumeResponse{}
 
-	if err := database.DB.Table("volumes").Order("created_at DESC").Scan(&volumes).Error; err != nil {
+	// Only retrieve volumes with "Mounted" status
+	if err := database.DB.Table("volumes").
+		Where("status = ?", models.VolumeStatusMounted).
+		Order("created_at DESC").
+		Scan(&volumes).Error; err != nil {
 		log.Printf("[NAS] Error fetching volumes: %v\n", err)
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch volumes"})
 	}

@@ -20,8 +20,8 @@ type Volume struct {
 	TotalSize  int64          `json:"total_size"` // bytes
 	UsedSize   int64          `json:"used_size"`  // bytes
 	Status     VolumeStatus   `gorm:"default:'Mounted'" json:"status"`
-	CreatedAt  int64          `gorm:"autoCreateTime" json:"created_at"`
-	UpdatedAt  int64          `gorm:"autoUpdateTime" json:"updated_at"`
+	CreatedAt  int64          `json:"created_at"`
+	UpdatedAt  int64          `json:"updated_at"`
 	DeletedAt  gorm.DeletedAt `gorm:"index" json:"-"`
 
 	// Relationships

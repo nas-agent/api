@@ -258,8 +258,9 @@ func addMountedVolume(dev LsblkDevice, mounted *[]LogicalVolume, mountedPaths ma
 }
 
 type MountRequest struct {
-	Device   string `json:"device"`
-	MountDir string `json:"mountDir"`
+	Device     string `json:"device"`
+	MountDir   string `json:"mountDir"`
+	FileSystem string `json:"fileSystem"` // optional, will be auto-detected if not provided
 }
 
 type FormatAndMountRequest struct {
@@ -446,6 +447,7 @@ func FormatAndMount(c *fiber.Ctx) error {
 
 		// Create volume entry in database
 		volumeID := fmt.Sprintf("vol_%d", time.Now().UnixNano())
+		now := time.Now().Unix()
 		volume := map[string]interface{}{
 			"id":          volumeID,
 			"mount_point": mountDir,
@@ -454,6 +456,8 @@ func FormatAndMount(c *fiber.Ctx) error {
 			"total_size":  totalSize,
 			"used_size":   usedSize,
 			"status":      "Mounted",
+			"created_at":  now,
+			"updated_at":  now,
 		}
 
 		if err := database.DB.Table("volumes").Create(volume).Error; err != nil {
@@ -524,6 +528,20 @@ func MountDevice(c *fiber.Ctx) error {
 		w.Flush()
 		time.Sleep(500 * time.Millisecond) // realistic UX delay
 
+		// Auto-detect filesystem if not provided
+		fileSystem := req.FileSystem
+		if fileSystem == "" {
+			blkidCmd := exec.Command("sudo", "blkid", "-s", "TYPE", "-o", "value", req.Device)
+			if output, err := blkidCmd.CombinedOutput(); err == nil {
+				fileSystem = strings.TrimSpace(string(output))
+				if fileSystem == "" {
+					fileSystem = "unknown"
+				}
+			} else {
+				fileSystem = "unknown"
+			}
+		}
+
 		// Create mount point if it doesn't exist (use sudo for /mnt access)
 		mkdirCmd := exec.Command("sudo", "mkdir", "-p", mountDir)
 		if output, err := mkdirCmd.CombinedOutput(); err != nil {
@@ -550,6 +568,63 @@ func MountDevice(c *fiber.Ctx) error {
 
 		fmt.Fprintf(w, "data: {\"step\":\"Device mounted successfully!\", \"status\":\"success\", \"mountPoint\":\"%s\"}\n\n", mountDir)
 		w.Flush()
+
+		// Step 5: Register volume in database
+		fmt.Fprintf(w, "data: {\"step\":\"Registering volume in database...\", \"status\":\"loading\"}\n\n")
+		w.Flush()
+
+		// Get disk usage information
+		dfCmd := exec.Command("df", "-B1", mountDir)
+		dfOutput, err := dfCmd.CombinedOutput()
+		if err != nil {
+			log.Printf("[NAS] Failed to get disk usage: %v\n", err)
+			fmt.Fprintf(w, "data: {\"step\":\"Warning: Could not retrieve disk size information\", \"status\":\"warning\"}\n\n")
+			w.Flush()
+		}
+
+		var totalSize int64
+		var usedSize int64
+
+		if err == nil {
+			// Parse df output to get total and used sizes
+			lines := strings.Split(strings.TrimSpace(string(dfOutput)), "\n")
+			if len(lines) > 1 {
+				fields := strings.Fields(lines[1])
+				if len(fields) >= 3 {
+					if size, err := strconv.ParseInt(fields[1], 10, 64); err == nil {
+						totalSize = size
+					}
+					if size, err := strconv.ParseInt(fields[2], 10, 64); err == nil {
+						usedSize = size
+					}
+				}
+			}
+		}
+
+		// Create volume entry in database
+		volumeID := fmt.Sprintf("vol_%d", time.Now().UnixNano())
+		now := time.Now().Unix()
+		volume := map[string]interface{}{
+			"id":          volumeID,
+			"mount_point": mountDir,
+			"device_path": req.Device,
+			"file_system": fileSystem,
+			"total_size":  totalSize,
+			"used_size":   usedSize,
+			"status":      "Mounted",
+			"created_at":  now,
+			"updated_at":  now,
+		}
+
+		if err := database.DB.Table("volumes").Create(volume).Error; err != nil {
+			log.Printf("[NAS] Error registering volume: %v\n", err)
+			fmt.Fprintf(w, "data: {\"step\":\"Warning: Volume mounted but could not persist to database\", \"status\":\"warning\"}\n\n")
+			w.Flush()
+		} else {
+			log.Printf("[NAS] Volume registered in database with ID: %s\n", volumeID)
+			fmt.Fprintf(w, "data: {\"step\":\"Volume registered with ID: %s\", \"status\":\"success\"}\n\n", volumeID)
+			w.Flush()
+		}
 	})
 
 	return nil

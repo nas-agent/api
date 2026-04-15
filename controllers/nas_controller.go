@@ -140,11 +140,11 @@ func GetStorageDevices(c *fiber.Ctx) error {
 
 				// Only include specific file systems or device types
 				// We don't want tempfs, proc, sysfs, snapfuse, etc.
-				if strings.HasPrefix(fstype, "overlay") || strings.HasPrefix(fstype, "cgroup") || 
-				   fstype == "squashfs" || fstype == "tmpfs" || fstype == "devtmpfs" || fstype == "fuse" ||
-				   fstype == "autofs" || fstype == "proc" || fstype == "sysfs" || fstype == "securityfs" ||
-				   fstype == "nsfs" || fstype == "devpts" || fstype == "mqueue" || fstype == "pstore" ||
-				   fstype == "bpf" || fstype == "debugfs" || fstype == "tracefs" || fstype == "hugetlbfs" {
+				if strings.HasPrefix(fstype, "overlay") || strings.HasPrefix(fstype, "cgroup") ||
+					fstype == "squashfs" || fstype == "tmpfs" || fstype == "devtmpfs" || fstype == "fuse" ||
+					fstype == "autofs" || fstype == "proc" || fstype == "sysfs" || fstype == "securityfs" ||
+					fstype == "nsfs" || fstype == "devpts" || fstype == "mqueue" || fstype == "pstore" ||
+					fstype == "bpf" || fstype == "debugfs" || fstype == "tracefs" || fstype == "hugetlbfs" {
 					continue
 				}
 
@@ -155,7 +155,7 @@ func GetStorageDevices(c *fiber.Ctx) error {
 
 				// Create a logical volume entry for this mount
 				log.Printf("Adding /proc/mounts entry: %s on %s (fstype=%s)", device, mountPoint, fstype)
-				
+
 				usage, _ := disk.Usage(mountPoint)
 				name := filepath.Base(mountPoint)
 				if name == "" || name == "/" {
@@ -272,6 +272,6 @@ func addMountedVolume(dev LsblkDevice, mounted *[]LogicalVolume, mountedPaths ma
 		Disks:      []string{dev.Kname},
 	}
 	*mounted = append(*mounted, vol)
-	
+
 	log.Printf("       [Added] success: %+v", vol)
 }

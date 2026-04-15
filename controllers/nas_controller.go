@@ -300,13 +300,13 @@ func isSystemDisk(device string) bool {
 	// Method 2: Check if partitions of this device are mounted at critical paths
 	// Normalize device name (e.g., /dev/sda -> sda)
 	devName := strings.TrimPrefix(device, "/dev/")
-	
+
 	mountCmd := exec.Command("mount")
 	mountOutput, _ := mountCmd.CombinedOutput()
 	mountLines := strings.Split(string(mountOutput), "\n")
-	
+
 	systemPaths := []string{"/", "/boot", "/usr", "/var", "/etc", "/sys", "/proc", "/dev", "/tmp"}
-	
+
 	for _, line := range mountLines {
 		// Look for lines containing the device
 		if strings.Contains(line, devName) {
@@ -317,7 +317,7 @@ func isSystemDisk(device string) bool {
 			}
 		}
 	}
-	
+
 	return false
 }
 
@@ -347,11 +347,11 @@ func forceStopDevice(device string, maxRetries int) error {
 // Returns a map of device -> RAID array name
 func detectRaidArrays() map[string]string {
 	raidMap := make(map[string]string)
-	
+
 	// Use mdadm to query all active RAID arrays
 	mdadmCmd := exec.Command("sudo", "mdadm", "--query", "--export")
 	output, _ := mdadmCmd.CombinedOutput()
-	
+
 	// Parse mdadm output
 	lines := strings.Split(string(output), "\n")
 	for _, line := range lines {
@@ -367,15 +367,15 @@ func detectRaidArrays() map[string]string {
 			}
 		}
 	}
-	
+
 	// Alternative: Check using lsblk for md device children
 	// This catches RAID arrays more reliably
 	lsblkCmd := exec.Command("lsblk", "-J", "-n", "-o", "NAME,TYPE")
 	lsblkOutput, _ := lsblkCmd.CombinedOutput()
-	
+
 	var lsblkData map[string]interface{}
 	_ = json.Unmarshal(lsblkOutput, &lsblkData)
-	
+
 	// Check each device for md children
 	if blockdevices, ok := lsblkData["blockdevices"].([]interface{}); ok {
 		for _, bd := range blockdevices {
@@ -396,9 +396,36 @@ func detectRaidArrays() map[string]string {
 			}
 		}
 	}
-	
+
 	return raidMap
 }
+
+// hardenDeviceCleanup aggressively removes RAID/LVM metadata and releases kernel locks
+func hardenDeviceCleanup(device string) error {
+	log.Printf("[NAS] Hardening device cleanup for: %s", device)
+
+	// 1. Disable swap if active
+	exec.Command("sudo", "swapoff", device).Run()
+
+	// 2. Clear MDADM (RAID) superblocks
+	// Check device itself
+	exec.Command("sudo", "mdadm", "--zero-superblock", "--force", device).Run()
+	// Check partitions
+	exec.Command("sudo", "bash", "-c", fmt.Sprintf("sudo mdadm --zero-superblock --force %s* 2>/dev/null || true", device)).Run()
+
+	// 3. Clear LVM Physical Volume signatures
+	exec.Command("sudo", "pvremove", "-y", "-f", device).Run()
+
+	// 4. Wipe file system signatures (redundant but safe)
+	exec.Command("sudo", "wipefs", "-a", "-f", device).Run()
+
+	// 5. Refresh kernel partition table
+	exec.Command("sudo", "partprobe", device).Run()
+	time.Sleep(500 * time.Millisecond)
+
+	return nil
+}
+
 // 3. Format to specified filesystem (default ext4)
 // 4. Create mount directory and mount
 // 5. Get UUID and add to /etc/fstab for persistence
@@ -465,10 +492,10 @@ func FormatAndMount(c *fiber.Ctx) error {
 	activeRaids := detectRaidArrays()
 	if len(activeRaids) > 0 {
 		log.Printf("[NAS] Found %d active RAID arrays\n", len(activeRaids))
-		
+
 		// Normalize device name for comparison (e.g., /dev/sda -> sda)
 		devName := strings.TrimPrefix(req.Device, "/dev/")
-		
+
 		for raidDev, raidStatus := range activeRaids {
 			raidDevName := strings.TrimPrefix(raidDev, "/dev/")
 			// Check if requested device is in any active RAID
@@ -519,11 +546,7 @@ func FormatAndMount(c *fiber.Ctx) error {
 		time.Sleep(300 * time.Millisecond)
 
 		sendProgress(w, fmt.Sprintf("Step %d/%d: Wiping old filesystem signatures...", currentStep, totalSteps), "loading", currentStep, totalSteps)
-		wipeCmd := exec.Command("sudo", "wipefs", "-a", "-f", req.Device)
-		if output, err := wipeCmd.CombinedOutput(); err != nil {
-			log.Printf("[NAS] wipe failed: %v, output: %s\n", err, string(output))
-			sendProgress(w, fmt.Sprintf("Step %d/%d: ⚠️ Notice: Device may require additional cleanup: %s", currentStep, totalSteps, string(output)), "warning", currentStep, totalSteps)
-		}
+		hardenDeviceCleanup(req.Device)
 		time.Sleep(300 * time.Millisecond)
 
 		// Step 2: Format
@@ -537,13 +560,13 @@ func FormatAndMount(c *fiber.Ctx) error {
 			var formatCmd *exec.Cmd
 			switch req.FileSystem {
 			case "ext4":
-				formatCmd = exec.Command("sudo", "mkfs.ext4", "-F", req.Device)
+				formatCmd = exec.Command("sudo", "mkfs.ext4", "-F", "-F", req.Device)
 			case "ext3":
-				formatCmd = exec.Command("sudo", "mkfs.ext3", "-F", req.Device)
+				formatCmd = exec.Command("sudo", "mkfs.ext3", "-F", "-F", req.Device)
 			case "ntfs":
-				formatCmd = exec.Command("sudo", "mkfs.ntfs", "-f", req.Device)
+				formatCmd = exec.Command("sudo", "mkfs.ntfs", "-f", "-f", req.Device)
 			case "vfat":
-				formatCmd = exec.Command("sudo", "mkfs.vfat", "-F", "32", req.Device)
+				formatCmd = exec.Command("sudo", "mkfs.vfat", "-I", req.Device) // -I forces on whole disk
 			default:
 				sendProgress(w, fmt.Sprintf("Unsupported filesystem: %s", req.FileSystem), "error", currentStep, totalSteps)
 				return

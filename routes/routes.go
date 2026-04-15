@@ -57,6 +57,8 @@ func SetupSetup(app *fiber.App) {
 
 	// NAS
 	api.Get("/nas/storage/devices", controllers.GetStorageDevices)
+	api.Post("/nas/storage/mount", controllers.MountDevice)
+	api.Post("/nas/storage/unmount", controllers.UnmountDevice)
 	api.Get("/nas/network/interfaces", controllers.GetNetworkInterfaces)
 	api.Get("/nas/shares", controllers.GetShares)
 	api.Post("/nas/shares", controllers.CreateShare)

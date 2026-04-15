@@ -7,13 +7,13 @@ import (
 
 type User struct {
 	ID                 string         `gorm:"primaryKey;type:uuid" json:"user_id"`
-	Username           string         `gorm:"uniqueIndex;not null" json:"username"`
-	Email              string         `gorm:"uniqueIndex;not null" json:"email"`
+	Username           string         `gorm:"uniqueIndex:,where:deleted_at IS NULL;not null" json:"username"`
+	Email              string         `gorm:"uniqueIndex:,where:deleted_at IS NULL;not null" json:"email"`
 	Password           string         `gorm:"not null" json:"-"`
 	Role               string         `gorm:"default:'user'" json:"role"`
 	PersonalFolderPath string         `json:"personal_folder_path"`
-	CreatedAt          int64          `gorm:"autoCreateTime" json:"created_date"`
-	UpdatedAt          int64          `gorm:"autoUpdateTime" json:"updated_date"`
+	CreatedAt          int64          `json:"created_date"`
+	UpdatedAt          int64          `json:"updated_date"`
 	DeletedAt          gorm.DeletedAt `gorm:"index" json:"deleted_date"`
 
 	// Relationships

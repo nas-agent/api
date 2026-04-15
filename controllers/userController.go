@@ -8,10 +8,11 @@ import (
 	"os"
 	"time"
 
+	"strings"
+
 	"github.com/gofiber/fiber/v2"
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
-	"strings"
 )
 
 // GetUserID extracts user_id from JWT claims in the context
@@ -52,11 +53,13 @@ func Register(c *fiber.Ctx) error {
 	}
 
 	user := models.User{
-		Username: username,
-		Email:    email,
-		Password: string(password),
-		Role:     role,
+		Username:           username,
+		Email:              email,
+		Password:           string(password),
+		Role:               role,
 		PersonalFolderPath: fmt.Sprintf("/mnt/raid1/homes/%s", username),
+		CreatedAt:          time.Now().Unix(),
+		UpdatedAt:          time.Now().Unix(),
 	}
 
 	result := database.DB.Create(&user)
@@ -216,7 +219,7 @@ func DeleteUser(c *fiber.Ctx) error {
 
 	var user models.User
 	database.DB.Where("id = ?", id).First(&user)
-	
+
 	if err := database.DB.Unscoped().Where("id = ?", id).Delete(&models.User{}).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{"message": "Error deleting user"})
 	}

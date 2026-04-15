@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"api/config"
 	"api/database"
 	"api/models"
 	"encoding/json"
@@ -97,8 +98,16 @@ func strconvParseFloat(value string) (float64, error) {
 }
 
 func probeAIHealth() (bool, bool) {
+	aiConfig := config.GetAIServiceConfig()
 	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get("http://localhost:8000/health")
+
+	req, err := http.NewRequest("GET", aiConfig.Endpoint("/health"), nil)
+	if err != nil {
+		return false, false
+	}
+	req.Header.Set("X-API-Key", aiConfig.APIKey)
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return false, false
 	}

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"api/config"
 	"api/database"
 	"api/models"
 
@@ -21,17 +22,17 @@ import (
 
 // AITriggerPayload represents the JSON payload sent to the Python AI node
 type AITriggerPayload struct {
-	FileID            uint     `json:"file_id"`
-	FilePath          string   `json:"file_path"`
-	FileName          string   `json:"file_name"`
-	UserID            string   `json:"user_id"`
-	ExistingFolders   []string `json:"existing_folders"`
-	AnalysisProvider  string   `json:"analysis_provider"`
+	FileID            uint              `json:"file_id"`
+	FilePath          string            `json:"file_path"`
+	FileName          string            `json:"file_name"`
+	UserID            string            `json:"user_id"`
+	ExistingFolders   []string          `json:"existing_folders"`
+	AnalysisProvider  string            `json:"analysis_provider"`
 	GeminiAPIKey      string            `json:"gemini_api_key"`
 	GeminiModel       string            `json:"gemini_model"`
 	FolderProfiles    map[string]string `json:"folder_profiles"`
 	FileContentBase64 string            `json:"file_content_base64,omitempty"`
-	MimeType          string   `json:"mime_type,omitempty"`
+	MimeType          string            `json:"mime_type,omitempty"`
 }
 
 type AIAnalysisResponse struct {
@@ -79,22 +80,22 @@ func RefreshFileWatcher() {
 	watchMap = make(map[string]string)
 	done = make(chan bool)
 
-	for _, config := range configs {
-		if config.OriginPath != "" && config.Active {
+	for _, userAIConfig := range configs {
+		if userAIConfig.OriginPath != "" && userAIConfig.Active {
 			// Ensure path exists
-			os.MkdirAll(config.OriginPath, os.ModePerm)
+			os.MkdirAll(userAIConfig.OriginPath, os.ModePerm)
 
-			err = watcher.Add(config.OriginPath)
+			err = watcher.Add(userAIConfig.OriginPath)
 			if err != nil {
-				log.Printf("Error adding watcher for user %d at %s: %v", config.UserID, config.OriginPath, err)
+				log.Printf("Error adding watcher for user %s at %s: %v", userAIConfig.UserID, userAIConfig.OriginPath, err)
 				continue
 			}
 
-			watchMap[filepath.Clean(config.OriginPath)] = config.UserID
-			log.Printf("Successfully watching: %s (User ID: %d)", config.OriginPath, config.UserID)
+			watchMap[filepath.Clean(userAIConfig.OriginPath)] = userAIConfig.UserID
+			log.Printf("Successfully watching: %s (User ID: %s)", userAIConfig.OriginPath, userAIConfig.UserID)
 
-			if config.DestinationPath != "" {
-				os.MkdirAll(config.DestinationPath, os.ModePerm)
+			if userAIConfig.DestinationPath != "" {
+				os.MkdirAll(userAIConfig.DestinationPath, os.ModePerm)
 			}
 		}
 	}
@@ -130,12 +131,12 @@ func watchEventLoop() {
 					continue
 				}
 
-				var config models.UserAIConfig
-				database.DB.Where("user_id = ?", userID).First(&config)
+				var userAIConfig models.UserAIConfig
+				database.DB.Where("user_id = ?", userID).First(&userAIConfig)
 
 				// Tiny delay for large file writes
 				time.Sleep(500 * time.Millisecond)
-				go processNewFile(event.Name, fileName, userID, config)
+				go processNewFile(event.Name, fileName, userID, userAIConfig)
 			}
 
 		case err, ok := <-watcher.Errors:
@@ -147,7 +148,7 @@ func watchEventLoop() {
 	}
 }
 
-func processNewFile(sourcePath, fileName string, userID string, config models.UserAIConfig) {
+func processNewFile(sourcePath, fileName string, userID string, userAIConfig models.UserAIConfig) {
 	// Create Initial Metadata (Pending AI Analysis)
 	fileInfo, _ := os.Stat(sourcePath)
 	size := int64(0)
@@ -169,7 +170,7 @@ func processNewFile(sourcePath, fileName string, userID string, config models.Us
 
 	// Scan Existing Folders
 	existingFolders := []string{}
-	if config.DestinationPath != "" {
+	if userAIConfig.DestinationPath != "" {
 		var scanFolders func(path string, currentDepth, maxDepth int)
 		scanFolders = func(path string, currentDepth, maxDepth int) {
 			if currentDepth > maxDepth {
@@ -186,14 +187,14 @@ func processNewFile(sourcePath, fileName string, userID string, config models.Us
 						continue // skip hidden folders
 					}
 					fullPath := filepath.Join(path, entry.Name())
-					relPath, _ := filepath.Rel(config.DestinationPath, fullPath)
+					relPath, _ := filepath.Rel(userAIConfig.DestinationPath, fullPath)
 					relPath = filepath.ToSlash(relPath) // Ensure standardized paths
 					existingFolders = append(existingFolders, relPath)
 					scanFolders(fullPath, currentDepth+1, maxDepth)
 				}
 			}
 		}
-		scanFolders(config.DestinationPath, 1, 2)
+		scanFolders(userAIConfig.DestinationPath, 1, 2)
 	}
 
 	// Fetch Folder Descriptions for context
@@ -211,7 +212,7 @@ func processNewFile(sourcePath, fileName string, userID string, config models.Us
 	startTime := time.Now()
 	log.Printf("Queueing %s for AI analysis...", fileName)
 	aiSemaphore <- struct{}{}
-	aiResp, err := triggerAIAnalysis(metadata.ID, sourcePath, fileName, userID, existingFolders, folderProfiles, config)
+	aiResp, err := triggerAIAnalysis(metadata.ID, sourcePath, fileName, userID, existingFolders, folderProfiles, userAIConfig)
 	<-aiSemaphore
 	duration := time.Since(startTime)
 	if err != nil {
@@ -241,8 +242,8 @@ func processNewFile(sourcePath, fileName string, userID string, config models.Us
 	}
 
 	suggestedFileName := fileName
-	if config.RenameFile {
-		suggestedFileName = SuggestPersonalizedFileName(userID, fileName, aiResp.Tags, config.RenameFormat)
+	if userAIConfig.RenameFile {
+		suggestedFileName = SuggestPersonalizedFileName(userID, fileName, aiResp.Tags, userAIConfig.RenameFormat)
 	}
 
 	// Save the summary generated by AI
@@ -256,8 +257,8 @@ func processNewFile(sourcePath, fileName string, userID string, config models.Us
 	finalPath := sourcePath
 
 	// Convert thresholds to scale of 0-100 for comparison with AI response
-	autoThreshold := config.ConfidenceAuto
-	rejectThreshold := config.ConfidenceReject
+	autoThreshold := userAIConfig.ConfidenceAuto
+	rejectThreshold := userAIConfig.ConfidenceReject
 
 	// If the DB stores them as 0.0-1.0, and AI returns 0-100, normalize autoThreshold and rejectThreshold
 	if autoThreshold <= 1.0 && aiResp.ConfidenceScore > 1 {
@@ -297,19 +298,19 @@ func processNewFile(sourcePath, fileName string, userID string, config models.Us
 			ConfidenceScore:   aiResp.ConfidenceScore,
 			Metadata: map[string]any{
 				"profile_folder_score": folderProfileScore,
-				"analysis_provider":    config.AnalysisProvider,
+				"analysis_provider":    userAIConfig.AnalysisProvider,
 			},
 		})
 		return
 	}
 
-	if config.DestinationPath != "" && config.AutoSelectFolder {
+	if userAIConfig.DestinationPath != "" && userAIConfig.AutoSelectFolder {
 		// Proceed with move
-		targetDir := filepath.Join(config.DestinationPath, selectedFolder)
+		targetDir := filepath.Join(userAIConfig.DestinationPath, selectedFolder)
 		os.MkdirAll(targetDir, os.ModePerm)
 
 		destFileName := fileName
-		if config.RenameFile {
+		if userAIConfig.RenameFile {
 			destFileName = EnsureUniqueName(targetDir, suggestedFileName)
 		}
 
@@ -358,8 +359,8 @@ func processNewFile(sourcePath, fileName string, userID string, config models.Us
 			ConfidenceScore:   aiResp.ConfidenceScore,
 			Metadata: map[string]any{
 				"profile_folder_score": folderProfileScore,
-				"analysis_provider":    config.AnalysisProvider,
-				"rename_enabled":       config.RenameFile,
+				"analysis_provider":    userAIConfig.AnalysisProvider,
+				"rename_enabled":       userAIConfig.RenameFile,
 			},
 		})
 	} else {
@@ -389,7 +390,7 @@ func processNewFile(sourcePath, fileName string, userID string, config models.Us
 			ConfidenceScore:   aiResp.ConfidenceScore,
 			Metadata: map[string]any{
 				"profile_folder_score": folderProfileScore,
-				"analysis_provider":    config.AnalysisProvider,
+				"analysis_provider":    userAIConfig.AnalysisProvider,
 			},
 		})
 	}
@@ -418,8 +419,8 @@ func processNewFile(sourcePath, fileName string, userID string, config models.Us
 	}
 }
 
-func triggerAIAnalysis(fileID uint, filePath string, fileName string, userID string, existingFolders []string, folderProfiles map[string]string, config models.UserAIConfig) (*AIAnalysisResponse, error) {
-	provider := strings.ToLower(strings.TrimSpace(config.AnalysisProvider))
+func triggerAIAnalysis(fileID uint, filePath string, fileName string, userID string, existingFolders []string, folderProfiles map[string]string, userAIConfig models.UserAIConfig) (*AIAnalysisResponse, error) {
+	provider := strings.ToLower(strings.TrimSpace(userAIConfig.AnalysisProvider))
 	if provider == "" {
 		provider = "local"
 	}
@@ -432,8 +433,8 @@ func triggerAIAnalysis(fileID uint, filePath string, fileName string, userID str
 		ExistingFolders:  existingFolders,
 		FolderProfiles:   folderProfiles,
 		AnalysisProvider: provider,
-		GeminiAPIKey:     config.GeminiAPIKey,
-		GeminiModel:      config.GeminiModel,
+		GeminiAPIKey:     userAIConfig.GeminiAPIKey,
+		GeminiModel:      userAIConfig.GeminiModel,
 	}
 
 	if provider == "gemini" {
@@ -446,9 +447,18 @@ func triggerAIAnalysis(fileID uint, filePath string, fileName string, userID str
 	}
 
 	jsonData, _ := json.Marshal(payload)
-	aiEndpoint := "http://localhost:8000/api/analyze/file"
+	aiConfig := config.GetAIServiceConfig()
+	aiEndpoint := aiConfig.Endpoint("/api/analyze/file")
 
-	resp, err := http.Post(aiEndpoint, "application/json", bytes.NewBuffer(jsonData))
+	req, err := http.NewRequest("POST", aiEndpoint, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", aiConfig.APIKey)
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}

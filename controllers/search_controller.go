@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"api/config"
 	"api/database"
 	"api/models"
 	"api/services"
@@ -230,8 +231,17 @@ func SemanticSearch(c *fiber.Ctx) error {
 	}
 
 	// 1. Send Query to Python NLP Agent
+	aiConfig := config.GetAIServiceConfig()
 	pythonReqBody, _ := json.Marshal(map[string]string{"query": req.Query})
-	resp, err := http.Post("http://localhost:8000/api/search/parse_query", "application/json", bytes.NewBuffer(pythonReqBody))
+	pythonReq, err := http.NewRequest("POST", aiConfig.Endpoint("/api/search/parse_query"), bytes.NewBuffer(pythonReqBody))
+	if err != nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "AI Search Engine is currently offline"})
+	}
+	pythonReq.Header.Set("Content-Type", "application/json")
+	pythonReq.Header.Set("X-API-Key", aiConfig.APIKey)
+
+	client := &http.Client{}
+	resp, err := client.Do(pythonReq)
 	if err != nil {
 		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "AI Search Engine is currently offline"})
 	}

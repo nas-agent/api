@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"api/config"
 	"api/database"
 	"api/models"
 	"api/services"
@@ -83,14 +84,14 @@ func GetPersonalizationProfile(c *fiber.Ctx) error {
 	userID := GetUserID(c)
 
 	// 1. Get Destination Path from Config to see all current folders
-	var config models.UserAIConfig
-	database.DB.Where("user_id = ?", userID).First(&config)
+	var userAIConfig models.UserAIConfig
+	database.DB.Where("user_id = ?", userID).First(&userAIConfig)
 
 	diskFolders := make(map[string]bool)
 	root := ""
-	if config.DestinationPath != "" {
+	if userAIConfig.DestinationPath != "" {
 		// Clean the path to handle potential mixed slashes
-		root = filepath.Clean(config.DestinationPath)
+		root = filepath.Clean(userAIConfig.DestinationPath)
 		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				// Log but continue to find other accessible folders
@@ -101,7 +102,7 @@ func GetPersonalizationProfile(c *fiber.Ctx) error {
 				rel, _ := filepath.Rel(root, path)
 				// Normalize to forward slashes for cross-platform depth counting
 				normalizedRel := filepath.ToSlash(rel)
-				
+
 				// Limit to 2 levels deep to match the AI scanner's context depth
 				if strings.Count(normalizedRel, "/") < 2 {
 					diskFolders[rel] = true
@@ -264,7 +265,7 @@ func UpdateFolderProfileDescription(c *fiber.Ctx) error {
 
 	var profile models.UserFolderProfile
 	result := database.DB.Where("user_id = ? AND folder_name = ?", userID, req.FolderName).First(&profile)
-	
+
 	if result.Error != nil && !errors.Is(result.Error, gorm.ErrRecordNotFound) {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "database error"})
 	}
@@ -617,8 +618,8 @@ func GenerateFolderDescription(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "folder_name is required"})
 	}
 
-	var config models.UserAIConfig
-	database.DB.Where("user_id = ?", userID).First(&config)
+	var userAIConfig models.UserAIConfig
+	database.DB.Where("user_id = ?", userID).First(&userAIConfig)
 
 	// Context gathering: find files in this folder
 	var files []models.FileMetadata
@@ -639,15 +640,23 @@ func GenerateFolderDescription(c *fiber.Ctx) error {
 	}
 
 	// Trigger Python Agent
-	agentURL := "http://localhost:8000/api/analyze/folder"
+	aiConfig := config.GetAIServiceConfig()
 	payload := map[string]any{
-		"folder_name":     req.FolderName,
-		"file_contexts":   fileContexts,
-		"gemini_api_key":  config.GeminiAPIKey,
+		"folder_name":    req.FolderName,
+		"file_contexts":  fileContexts,
+		"gemini_api_key": userAIConfig.GeminiAPIKey,
 	}
 
 	jsonData, _ := json.Marshal(payload)
-	resp, err := http.Post(agentURL, "application/json", bytes.NewBuffer(jsonData))
+	agentReq, err := http.NewRequest("POST", aiConfig.Endpoint("/api/analyze/folder"), bytes.NewBuffer(jsonData))
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "agent unreachable"})
+	}
+	agentReq.Header.Set("Content-Type", "application/json")
+	agentReq.Header.Set("X-API-Key", aiConfig.APIKey)
+
+	client := &http.Client{}
+	resp, err := client.Do(agentReq)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "agent unreachable"})
 	}

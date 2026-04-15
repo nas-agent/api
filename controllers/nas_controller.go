@@ -402,26 +402,55 @@ func detectRaidArrays() map[string]string {
 
 // hardenDeviceCleanup aggressively removes RAID/LVM metadata and releases kernel locks
 func hardenDeviceCleanup(device string) error {
-	log.Printf("[NAS] Hardening device cleanup for: %s", device)
+	log.Printf("[NAS] START NUCLEAR CLEANUP for: %s", device)
 
 	// 1. Disable swap if active
 	exec.Command("sudo", "swapoff", device).Run()
+	exec.Command("sudo", "swapoff", device+"1").Run()
+	exec.Command("sudo", "swapoff", device+"2").Run()
 
-	// 2. Clear MDADM (RAID) superblocks
-	// Check device itself
-	exec.Command("sudo", "mdadm", "--zero-superblock", "--force", device).Run()
-	// Check partitions
-	exec.Command("sudo", "bash", "-c", fmt.Sprintf("sudo mdadm --zero-superblock --force %s* 2>/dev/null || true", device)).Run()
+	// 2. Identify and stop MD devices using this disk
+	devName := filepath.Base(device)
+	mdstat, _ := os.ReadFile("/proc/mdstat")
+	if strings.Contains(string(mdstat), devName) {
+		log.Printf("[NAS] Found device in /proc/mdstat, attempting to stop related RAID arrays")
+		// Try to stop common MD devices
+		for i := 0; i < 20; i++ {
+			mdDev := fmt.Sprintf("/dev/md%d", i)
+			if _, err := os.Stat(mdDev); err == nil {
+				exec.Command("sudo", "mdadm", "--stop", mdDev).Run()
+			}
+		}
+		// Also check /dev/md127, md126 etc
+		for i := 127; i > 120; i-- {
+			mdDev := fmt.Sprintf("/dev/md%d", i)
+			if _, err := os.Stat(mdDev); err == nil {
+				exec.Command("sudo", "mdadm", "--stop", mdDev).Run()
+			}
+		}
+	}
 
-	// 3. Clear LVM Physical Volume signatures
-	exec.Command("sudo", "pvremove", "-y", "-f", device).Run()
+	// 3. Remove Device Mapper mappings
+	exec.Command("sudo", "dmsetup", "remove", "--force", devName).Run()
+	exec.Command("sudo", "dm_release", device).Run() // Some systems use this
 
-	// 4. Wipe file system signatures (redundant but safe)
+	// 4. Force release handles and clear partitions
+	exec.Command("sudo", "blockdev", "--flushbufs", device).Run()
+
+	// 5. THE NUCLEAR OPTION: Wipe first 20MB to kill partition tables and RAID/LVM headers
+	log.Printf("[NAS] Wiping disk headers with dd...")
+	exec.Command("sudo", "dd", "if=/dev/zero", "of="+device, "bs=1M", "count=20", "conv=notrunc").Run()
+
+	// 6. Clear signatures again
 	exec.Command("sudo", "wipefs", "-a", "-f", device).Run()
 
-	// 5. Refresh kernel partition table
+	// 7. Refresh kernel and settle udev
+	exec.Command("sudo", "udevadm", "settle").Run()
 	exec.Command("sudo", "partprobe", device).Run()
-	time.Sleep(500 * time.Millisecond)
+	exec.Command("sudo", "sync").Run()
+
+	time.Sleep(2 * time.Second) // Let the kernel breathe
+	log.Printf("[NAS] NUCLEAR CLEANUP COMPLETE for: %s", device)
 
 	return nil
 }

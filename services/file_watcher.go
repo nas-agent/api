@@ -116,18 +116,26 @@ func watchEventLoop() {
 				return
 			}
 
-			// Detect file creation (new file moved/downloaded)
-			if event.Has(fsnotify.Create) {
-				log.Printf("Watcher event detected: %s", event.Name)
+			// Detect file creation OR file rename/move (files moved to watched folder)
+			if event.Has(fsnotify.Create) || event.Has(fsnotify.Rename) {
+				log.Printf("Watcher event detected [%s]: %s", eventTypeString(event.Op), event.Name)
 
 				fileName := filepath.Base(event.Name)
 				if strings.HasPrefix(fileName, ".") || strings.HasSuffix(fileName, ".tmp") || strings.HasSuffix(fileName, ".crdownload") {
+					log.Printf("Skipping temporary/hidden file: %s", fileName)
+					continue
+				}
+
+				// Check if file still exists (in case it was moved away)
+				if _, err := os.Stat(event.Name); err != nil {
+					log.Printf("File no longer exists or is not accessible: %s (error: %v)", event.Name, err)
 					continue
 				}
 
 				dir := filepath.Clean(filepath.Dir(event.Name))
 				userID, exists := watchMap[dir]
 				if !exists {
+					log.Printf("Watched path not found in map: %s", dir)
 					continue
 				}
 
@@ -145,6 +153,24 @@ func watchEventLoop() {
 			}
 			log.Printf("File watcher error: %v", err)
 		}
+	}
+}
+
+// eventTypeString returns a human-readable string for fsnotify.Op
+func eventTypeString(op fsnotify.Op) string {
+	switch op {
+	case fsnotify.Create:
+		return "CREATE"
+	case fsnotify.Write:
+		return "WRITE"
+	case fsnotify.Remove:
+		return "REMOVE"
+	case fsnotify.Rename:
+		return "RENAME"
+	case fsnotify.Chmod:
+		return "CHMOD"
+	default:
+		return "UNKNOWN"
 	}
 }
 

@@ -287,9 +287,10 @@ func MountDevice(c *fiber.Ctx) error {
 		w.Flush()
 		time.Sleep(500 * time.Millisecond) // realistic UX delay
 
-		// Create mount point if it doesn't exist
-		if err := os.MkdirAll(mountDir, 0755); err != nil {
-			fmt.Fprintf(w, "data: {\"step\":\"Failed to create directory: %v\", \"status\":\"error\"}\n\n", err)
+		// Create mount point if it doesn't exist (use sudo for /mnt access)
+		mkdirCmd := exec.Command("sudo", "mkdir", "-p", mountDir)
+		if output, err := mkdirCmd.CombinedOutput(); err != nil {
+			fmt.Fprintf(w, "data: {\"step\":\"Failed to create directory: %s\", \"status\":\"error\"}\n\n", string(output))
 			w.Flush()
 			return
 		}

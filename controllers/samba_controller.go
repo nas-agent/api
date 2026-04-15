@@ -47,22 +47,6 @@ func CreateShare(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Volume is not mounted"})
 	}
 
-	// 1.5 Check user has permission to access this volume (if not admin)
-	// For now, we'll check if the user has explicit access to the volume via user_volumes table
-	// Public shares don't require owner permission, but private shares do
-	if input.Type == models.ShareTypePrivate && input.OwnerID != "" {
-		var userVolumeCount int64
-		if err := database.DB.Table("user_volumes").Where("user_id = ? AND volume_id = ?", input.OwnerID, input.VolumeID).Count(&userVolumeCount).Error; err != nil {
-			return c.Status(500).JSON(fiber.Map{"error": "Failed to check user permissions"})
-		}
-
-		// If no explicit assignment found, deny the operation
-		// Admins should be handled separately or have all volumes pre-assigned
-		if userVolumeCount == 0 {
-			return c.Status(403).JSON(fiber.Map{"error": "User does not have access to this volume"})
-		}
-	}
-
 	// 2. Determine Path using volume mount point
 	var path string
 	if input.Type == models.ShareTypePrivate {

@@ -283,6 +283,8 @@ func MountDevice(c *fiber.Ctx) error {
 			mountDir = "/mnt/" + deviceName
 		}
 
+		log.Printf("[NAS] Mount attempt: device=%s, mountDir=%s\n", req.Device, mountDir)
+
 		fmt.Fprintf(w, "data: {\"step\":\"Creating mount point %s...\", \"status\":\"loading\"}\n\n", mountDir)
 		w.Flush()
 		time.Sleep(500 * time.Millisecond) // realistic UX delay
@@ -290,10 +292,12 @@ func MountDevice(c *fiber.Ctx) error {
 		// Create mount point if it doesn't exist (use sudo for /mnt access)
 		mkdirCmd := exec.Command("sudo", "mkdir", "-p", mountDir)
 		if output, err := mkdirCmd.CombinedOutput(); err != nil {
+			log.Printf("[NAS] mkdir failed: %v, output: %s\n", err, string(output))
 			fmt.Fprintf(w, "data: {\"step\":\"Failed to create directory: %s\", \"status\":\"error\"}\n\n", string(output))
 			w.Flush()
 			return
 		}
+		log.Printf("[NAS] Mount point created: %s\n", mountDir)
 
 		fmt.Fprintf(w, "data: {\"step\":\"Mounting device %s...\", \"status\":\"loading\"}\n\n", req.Device)
 		w.Flush()
@@ -302,10 +306,12 @@ func MountDevice(c *fiber.Ctx) error {
 		// Run mount command
 		cmd := exec.Command("sudo", "mount", req.Device, mountDir)
 		if output, err := cmd.CombinedOutput(); err != nil {
+			log.Printf("[NAS] mount failed: %v, output: %s\n", err, string(output))
 			fmt.Fprintf(w, "data: {\"step\":\"Mount failed: %s\", \"status\":\"error\"}\n\n", string(output))
 			w.Flush()
 			return
 		}
+		log.Printf("[NAS] Device mounted successfully: %s -> %s\n", req.Device, mountDir)
 
 		fmt.Fprintf(w, "data: {\"step\":\"Device mounted successfully!\", \"status\":\"success\", \"mountPoint\":\"%s\"}\n\n", mountDir)
 		w.Flush()

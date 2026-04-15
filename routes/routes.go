@@ -130,7 +130,7 @@ func SetupSetup(app *fiber.App) {
 
 	// Search
 	protected.Get("/dashboard/summary", controllers.GetDashboardSummary)
-	api.Get("/dashboard/stats", controllers.GetAdminDashboardStats)
-	api.Get("/dashboard/recent-activity", controllers.GetAdminRecentActivity)
+	protected.Get("/dashboard/stats", controllers.GetAdminDashboardStats)
+	protected.Get("/dashboard/recent-activity", controllers.GetAdminRecentActivity)
 	protected.Post("/search/semantic", controllers.SemanticSearch)
 }

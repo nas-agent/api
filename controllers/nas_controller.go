@@ -1373,24 +1373,35 @@ func CreateRaid1(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "existingDisk, newDisk, and name are required"})
 	}
 
+	// Normalize device paths - add /dev/ prefix if missing
+	existingDisk := req.ExistingDisk
+	if !strings.HasPrefix(existingDisk, "/dev/") {
+		existingDisk = "/dev/" + existingDisk
+	}
+
+	newDisk := req.NewDisk
+	if !strings.HasPrefix(newDisk, "/dev/") {
+		newDisk = "/dev/" + newDisk
+	}
+
 	// Ensure mdadm is installed
 	if _, err := exec.LookPath("mdadm"); err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "mdadm not found - RAID tools not installed"})
 	}
 
 	// Check if devices exist
-	existingCmd := exec.Command("sudo", "test", "-b", req.ExistingDisk)
+	existingCmd := exec.Command("sudo", "test", "-b", existingDisk)
 	if err := existingCmd.Run(); err != nil {
-		return c.Status(400).JSON(fiber.Map{"error": "Existing disk not found: " + req.ExistingDisk})
+		return c.Status(400).JSON(fiber.Map{"error": "Existing disk not found: " + existingDisk})
 	}
 
-	newCmd := exec.Command("sudo", "test", "-b", req.NewDisk)
+	newCmd := exec.Command("sudo", "test", "-b", newDisk)
 	if err := newCmd.Run(); err != nil {
-		return c.Status(400).JSON(fiber.Map{"error": "New disk not found: " + req.NewDisk})
+		return c.Status(400).JSON(fiber.Map{"error": "New disk not found: " + newDisk})
 	}
 
 	// Get mount point of existing disk
-	mountCmd := exec.Command("sh", "-c", fmt.Sprintf("mount | grep %s | awk '{print $3}'", req.ExistingDisk))
+	mountCmd := exec.Command("sh", "-c", fmt.Sprintf("mount | grep %s | awk '{print $3}'", existingDisk))
 	output, err := mountCmd.CombinedOutput()
 	if err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": "Could not determine mount point of existing disk"})
@@ -1428,18 +1439,18 @@ func CreateRaid1(c *fiber.Ctx) error {
 
 		// Partition the new disk
 		sendRaidEvent("progress", "Partitioning new disk...")
-		partCmd := exec.Command("sudo", "fdisk", "-l", req.NewDisk)
+		partCmd := exec.Command("sudo", "fdisk", "-l", newDisk)
 		if _, err := partCmd.CombinedOutput(); err != nil {
 			sendRaidEvent("error", "Failed to read disk layout")
 			return
 		}
 
 		// Create partition on new disk matching existing disk
-		sendRaidEvent("progress", fmt.Sprintf("Creating partition on %s...", req.NewDisk))
+		sendRaidEvent("progress", fmt.Sprintf("Creating partition on %s...", newDisk))
 
 		// Use sfdisk to clone partition table
-		getPartCmd := exec.Command("sudo", "sfdisk", "-d", req.ExistingDisk)
-		clonePartCmd := exec.Command("sudo", "sfdisk", req.NewDisk)
+		getPartCmd := exec.Command("sudo", "sfdisk", "-d", existingDisk)
+		clonePartCmd := exec.Command("sudo", "sfdisk", newDisk)
 
 		partOutput, _ := getPartCmd.CombinedOutput()
 		clonePartCmd.Stdin = strings.NewReader(string(partOutput))
@@ -1452,13 +1463,13 @@ func CreateRaid1(c *fiber.Ctx) error {
 		time.Sleep(2 * time.Second)
 
 		// Determine partition number (usually partition 1)
-		newDiskPart := req.NewDisk + "1"
+		newDiskPart := newDisk + "1"
 
 		// Create RAID-1 array
 		sendRaidEvent("progress", fmt.Sprintf("Creating RAID-1 array md%d...", time.Now().UnixNano()%100))
 
 		raidName := fmt.Sprintf("md%d", time.Now().UnixNano()%1000)
-		mdadmCmd := exec.Command("sudo", "mdadm", "--create", "/dev/"+raidName, "--level", "1", "--raid-devices", "2", req.ExistingDisk, newDiskPart)
+		mdadmCmd := exec.Command("sudo", "mdadm", "--create", "/dev/"+raidName, "--level", "1", "--raid-devices", "2", existingDisk, newDiskPart)
 		if out, err := mdadmCmd.CombinedOutput(); err != nil {
 			sendRaidEvent("error", fmt.Sprintf("Failed to create RAID-1: %s", string(out)))
 			return
@@ -1499,7 +1510,7 @@ func CreateRaid1(c *fiber.Ctx) error {
 			"raid_name":   raidName,
 			"device_path": "/dev/" + raidName,
 			"status":      "active",
-			"disk1":       req.ExistingDisk,
+			"disk1":       existingDisk,
 			"disk2":       newDiskPart,
 			"created_at":  now,
 			"updated_at":  now,

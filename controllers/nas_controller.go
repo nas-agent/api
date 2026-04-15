@@ -288,12 +288,51 @@ type FormatAndMountRequest struct {
 	FileSystem string `json:"fileSystem"` // e.g., "ext4", defaults to "ext4"
 }
 
+// isSystemDisk checks if a device is the root/system disk
+func isSystemDisk(device string) bool {
+	// Check root mounts
+	lsblkCmd := exec.Command("lsblk", "-n", "-o", "MOUNTPOINT", device)
+	output, _ := lsblkCmd.CombinedOutput()
+	mounts := string(output)
+
+	systemPaths := []string{"/", "/boot", "/usr", "/var", "/etc", "/sys", "/proc", "/dev", "/tmp"}
+	for _, path := range systemPaths {
+		if strings.Contains(mounts, path) {
+			return true
+		}
+	}
+	return false
+}
+
+// forceStopDevice uses fuser to kill processes and fully release a device
+func forceStopDevice(device string, maxRetries int) error {
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		// Try to kill all processes using the device
+		fuserCmd := exec.Command("sudo", "fuser", "-k", "-9", device)
+		_, _ = fuserCmd.CombinedOutput() // Ignore errors; fuser fails if no processes
+
+		time.Sleep(500 * time.Millisecond)
+
+		// Check if device is now available
+		testCmd := exec.Command("sudo", "wipefs", device)
+		if err := testCmd.Run(); err == nil {
+			return nil // Device is available
+		}
+
+		if attempt < maxRetries {
+			time.Sleep(1 * time.Second)
+		}
+	}
+	return fmt.Errorf("device still busy after %d attempts", maxRetries)
+}
+
 // FormatAndMount formats a disk and mounts it persistently
 // Steps:
-// 1. Unmount and wipe old filesystem
-// 2. Format to specified filesystem (default ext4)
-// 3. Create mount directory and mount
-// 4. Get UUID and add to /etc/fstab for persistence
+// 1. Validate device and unmount existing mounts
+// 2. Force-stop processes and wipe filesystem
+// 3. Format to specified filesystem (default ext4)
+// 4. Create mount directory and mount
+// 5. Get UUID and add to /etc/fstab for persistence
 func FormatAndMount(c *fiber.Ctx) error {
 	var req FormatAndMountRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -304,10 +343,13 @@ func FormatAndMount(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Device path is required"})
 	}
 
-	// Validate device is a partition, not raw disk
-	deviceName := filepath.Base(req.Device)
-	lastChar := deviceName[len(deviceName)-1]
-	isPartition := lastChar >= '0' && lastChar <= '9'
+	// **SAFETY CHECK: Prevent formatting system disks**
+	if isSystemDisk(req.Device) {
+		log.Printf("[NAS] ⛔ Attempt to format system disk: %s\n", req.Device)
+		return c.Status(403).JSON(fiber.Map{
+			"error": fmt.Sprintf("❌ Cannot format %s: This is a system disk in use by the operating system. Formatting would damage your system.", req.Device),
+		})
+	}
 
 	// Check if device is part of any RAID arrays
 	var raids []models.RaidArray
@@ -349,13 +391,8 @@ func FormatAndMount(c *fiber.Ctx) error {
 		}
 	}
 
-	// For raw disks, we'll use the whole disk (e.g., /dev/sdb -> /dev/sdb1 after part init)
-	// But for safety, we require explicit partitioning first
-	if !isPartition {
-		// Actually, let's allow raw disk formatting for simplicity
-		// We'll create a single partition on it
-		log.Printf("[NAS] Format and mount on raw disk: %s\n", req.Device)
-	}
+	// For raw disks, we'll use the whole disk
+	log.Printf("[NAS] Preparing to format device: %s\n", req.Device)
 
 	// Default to ext4
 	if req.FileSystem == "" {
@@ -379,22 +416,28 @@ func FormatAndMount(c *fiber.Ctx) error {
 		totalSteps := 5
 		currentStep := 1
 
-		// Step 1: Unmount and Wipe
+		// Step 1: Unmount, stop processes, and wipe
 		sendProgress(w, fmt.Sprintf("Step %d/%d: Unmounting existing mounts...", currentStep, totalSteps), "loading", currentStep, totalSteps)
 		unmountCmd := exec.Command("bash", "-c", fmt.Sprintf("sudo umount -l %s* 2>/dev/null || true", req.Device))
-		if output, err := unmountCmd.CombinedOutput(); err != nil {
+		if _, err := unmountCmd.CombinedOutput(); err != nil {
 			log.Printf("[NAS] Unmount warning (may be ok): %v\n", err)
-			sendProgress(w, fmt.Sprintf("Step %d/%d: ⚠️ Warning unmounting: %s", currentStep, totalSteps, string(output)), "warning", currentStep, totalSteps)
 		}
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(300 * time.Millisecond)
+
+		sendProgress(w, fmt.Sprintf("Step %d/%d: Stopping processes using device...", currentStep, totalSteps), "loading", currentStep, totalSteps)
+		if err := forceStopDevice(req.Device, 3); err != nil {
+			log.Printf("[NAS] Force stop warning: %v\n", err)
+			sendProgress(w, fmt.Sprintf("Step %d/%d: ⚠️ Warning: %s", currentStep, totalSteps, err.Error()), "warning", currentStep, totalSteps)
+		}
+		time.Sleep(300 * time.Millisecond)
 
 		sendProgress(w, fmt.Sprintf("Step %d/%d: Wiping old filesystem signatures...", currentStep, totalSteps), "loading", currentStep, totalSteps)
-		wipeCmd := exec.Command("sudo", "wipefs", "-a", req.Device)
+		wipeCmd := exec.Command("sudo", "wipefs", "-a", "-f", req.Device)
 		if output, err := wipeCmd.CombinedOutput(); err != nil {
 			log.Printf("[NAS] wipe failed: %v, output: %s\n", err, string(output))
-			sendProgress(w, fmt.Sprintf("Step %d/%d: ⚠️ Warning wiping disk: %s", currentStep, totalSteps, string(output)), "warning", currentStep, totalSteps)
+			sendProgress(w, fmt.Sprintf("Step %d/%d: ⚠️ Notice: Device may require additional cleanup: %s", currentStep, totalSteps, string(output)), "warning", currentStep, totalSteps)
 		}
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(300 * time.Millisecond)
 
 		// Step 2: Format
 		currentStep = 2
@@ -414,12 +457,28 @@ func FormatAndMount(c *fiber.Ctx) error {
 			return
 		}
 
-		if output, err := formatCmd.CombinedOutput(); err != nil {
-			log.Printf("[NAS] format failed: %v, output: %s\n", err, string(output))
-			sendProgress(w, fmt.Sprintf("❌ Format failed: %s", string(output)), "error", currentStep, totalSteps)
+		// Retry formatting up to 3 times with delay
+		formatSuccess := false
+		for attempt := 1; attempt <= 3; attempt++ {
+			if output, err := formatCmd.CombinedOutput(); err != nil {
+				if attempt < 3 {
+					log.Printf("[NAS] Format attempt %d failed (retrying): %v, output: %s\n", attempt, err, string(output))
+					sendProgress(w, fmt.Sprintf("Step %d/%d: Attempt %d/3 - Retrying format...", currentStep, totalSteps, attempt), "loading", currentStep, totalSteps)
+					time.Sleep(2 * time.Second)
+				} else {
+					log.Printf("[NAS] format failed after %d attempts: %v, output: %s\n", attempt, err, string(output))
+					sendProgress(w, fmt.Sprintf("❌ Format failed: %s", string(output)), "error", currentStep, totalSteps)
+				}
+			} else {
+				log.Printf("[NAS] Format completed successfully on attempt %d: %s\n", attempt, req.Device)
+				formatSuccess = true
+				break
+			}
+		}
+
+		if !formatSuccess {
 			return
 		}
-		log.Printf("[NAS] Format completed successfully: %s\n", req.Device)
 		time.Sleep(500 * time.Millisecond)
 
 		// Step 3: Create mount directory and mount

@@ -16,10 +16,21 @@ import (
 
 func GetShares(c *fiber.Ctx) error {
 	var shares []models.Share
-	database.DB.Find(&shares)
 
-	// In a real implementation, we might want to enrichment this data
-	// with real-time status from Samba, but for now, we serve from DB.
+	// Join with volumes table and only return shares from mounted volumes
+	if err := database.DB.
+		Joins("INNER JOIN volumes ON shares.volume_id = volumes.id").
+		Where("volumes.status = ?", "Mounted").
+		Find(&shares).Error; err != nil {
+		log.Printf("Error fetching shares: %v\n", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch shares"})
+	}
+
+	// Return empty array instead of null
+	if shares == nil {
+		shares = []models.Share{}
+	}
+
 	return c.JSON(shares)
 }
 

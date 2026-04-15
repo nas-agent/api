@@ -3,6 +3,7 @@ package controllers
 import (
 	"api/database"
 	"api/models"
+	"api/services"
 	"bufio"
 	"encoding/json"
 	"fmt"
@@ -989,13 +990,33 @@ func UnmountDevice(c *fiber.Ctx) error {
 
 		// Step 3: Cleanup and update database
 		currentStep = 3
-		fmt.Fprintf(w, "data: {\"step\":\"Step %d/%d: Cleaning up mount directories...\", \"status\":\"loading\", \"progress\":66, \"currentStep\":%d, \"totalSteps\":%d}\n\n", currentStep, totalSteps, currentStep, totalSteps)
+		fmt.Fprintf(w, "data: {\"step\":\"Step %d/%d: Cleaning up mount directories and shares...\", \"status\":\"loading\", \"progress\":66, \"currentStep\":%d, \"totalSteps\":%d}\n\n", currentStep, totalSteps, currentStep, totalSteps)
 		w.Flush()
 		time.Sleep(300 * time.Millisecond)
 
+		// Find volume by mount point to clean up associated shares
+		var volume models.Volume
+		if err := database.DB.Where("mount_point = ?", target).First(&volume).Error; err == nil {
+			// Delete all shares associated with this volume
+			var shares []models.Share
+			if err := database.DB.Where("volume_id = ?", volume.ID).Find(&shares).Error; err == nil {
+				for _, share := range shares {
+					// Unregister from Samba
+					services.Samba.UnregisterShare(share.Name)
+					// Delete from database
+					database.DB.Unscoped().Delete(&share)
+				}
+			}
+		}
+
 		// Remove mount directory if in /mnt or /media
 		if strings.HasPrefix(target, "/mnt/") || strings.HasPrefix(target, "/media/") {
-			os.Remove(target) // Ignores error if directory is not empty
+			// Use sudo rm -rf to remove directory and all contents
+			rmCmd := exec.Command("sudo", "rm", "-rf", target)
+			if output, err := rmCmd.CombinedOutput(); err != nil {
+				log.Printf("Warning: Failed to remove mount directory %s: %v, output: %s\n", target, err, string(output))
+				// Continue anyway - unmount was successful
+			}
 		}
 
 		// Update database: mark volume as unmounted

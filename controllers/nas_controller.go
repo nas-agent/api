@@ -1500,11 +1500,21 @@ func CreateRaid1(c *fiber.Ctx) error {
 		log.Printf("[NAS] Using partition: %s", newDiskPart)
 		sendRaidEvent("progress", fmt.Sprintf("Using partition %s for RAID", strings.TrimPrefix(newDiskPart, "/dev/")))
 
+		// Unmount existing disk before RAID creation (mdadm needs exclusive access)
+		sendRaidEvent("progress", fmt.Sprintf("Unmounting %s for RAID preparation...", existingDisk))
+		umountCmd := exec.Command("sudo", "umount", "-fl", existingDisk)
+		if out, err := umountCmd.CombinedOutput(); err != nil {
+			log.Printf("[NAS] Unmount output: %s", string(out))
+			// Don't fail here - disk might not be mounted
+		}
+		time.Sleep(1 * time.Second)
+
 		// Create RAID-1 array
 		sendRaidEvent("progress", fmt.Sprintf("Creating RAID-1 array with %s and %s...", existingDisk, newDiskPart))
 
 		raidName := fmt.Sprintf("md%d", time.Now().UnixNano()%1000)
-		mdadmCmd := exec.Command("sudo", "mdadm", "--create", "/dev/"+raidName, "--level", "1", "--raid-devices", "2", "--force", existingDisk, newDiskPart)
+		// Use --bitmap=internal to avoid interactive prompts and --assume-clean to preserve data
+		mdadmCmd := exec.Command("sudo", "mdadm", "--create", "/dev/"+raidName, "--level", "1", "--raid-devices", "2", "--force", "--bitmap=internal", "--assume-clean", existingDisk, newDiskPart)
 
 		out, err := mdadmCmd.CombinedOutput()
 		if err != nil {

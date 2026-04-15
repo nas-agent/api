@@ -82,30 +82,44 @@ func CreateShare(c *fiber.Ctx) error {
 		var user models.User
 		database.DB.Where("id = ?", input.OwnerID).First(&user)
 
+		// Ensure sambashare group exists
+		exec.Command("sudo", "groupadd", "-f", "sambashare").Run()
+
+		// Add user to sambashare group
+		exec.Command("sudo", "usermod", "-a", "-G", "sambashare", user.Username).Run()
+
 		// chown user:sambashare path
-		chownCmd := exec.Command("sudo", "chown", fmt.Sprintf("%s:sambashare", user.Username), path)
+		chownCmd := exec.Command("sudo", "chown", "-R", fmt.Sprintf("%s:sambashare", user.Username), path)
 		if output, err := chownCmd.CombinedOutput(); err != nil {
 			log.Printf("Warning: Failed to chown %s: %v, output: %s\n", path, err, string(output))
 		}
 
-		// chmod 2770 path (group sticky bit, rwx for user and group)
-		chmodCmd := exec.Command("sudo", "chmod", "2770", path)
+		// chmod 2775 path (group sticky bit, rwx for user and group, rx for others)
+		chmodCmd := exec.Command("sudo", "chmod", "-R", "2775", path)
 		if output, err := chmodCmd.CombinedOutput(); err != nil {
 			log.Printf("Warning: Failed to chmod %s: %v, output: %s\n", path, err, string(output))
 		}
+
+		log.Printf("Set permissions for private share: owner=%s, path=%s\n", user.Username, path)
 	} else {
 		// Public share: world readable/writable
-		// chown nobody:sambashare path
-		chownCmd := exec.Command("sudo", "chown", "nobody:sambashare", path)
+		// Ensure sambashare group exists
+		exec.Command("sudo", "groupadd", "-f", "sambashare").Run()
+
+		// chown nobody:sambashare path (or use nobody for public access)
+		chownCmd := exec.Command("sudo", "chown", "-R", "nobody:sambashare", path)
 		if output, err := chownCmd.CombinedOutput(); err != nil {
 			log.Printf("Warning: Failed to chown %s: %v, output: %s\n", path, err, string(output))
 		}
 
-		// chmod 2777 path (group sticky bit, rwx for all)
-		chmodCmd := exec.Command("sudo", "chmod", "2777", path)
+		// chmod 2775 path (group sticky bit, rwx for user and group, rx for others)
+		// For public shares, we want everyone to write
+		chmodCmd := exec.Command("sudo", "chmod", "-R", "2775", path)
 		if output, err := chmodCmd.CombinedOutput(); err != nil {
 			log.Printf("Warning: Failed to chmod %s: %v, output: %s\n", path, err, string(output))
 		}
+
+		log.Printf("Set permissions for public share: path=%s\n", path)
 	}
 
 	// 3. Create in DB

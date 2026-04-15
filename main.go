@@ -98,6 +98,9 @@ func main() {
 	// Initialize Database Connection and Auto-Migrate
 	database.ConnectDB()
 
+	// Initialize existing RAID arrays from system
+	database.InitializeRaidArraysFromSystem()
+
 	// Initialize File Watcher Service
 	services.InitFileWatcher()
 

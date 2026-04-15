@@ -316,30 +316,30 @@ func FormatAndMount(c *fiber.Ctx) error {
 	} else {
 		log.Printf("[NAS] Found %d RAID arrays in database\n", len(raids))
 		reqDeviceNorm := strings.TrimPrefix(strings.TrimPrefix(req.Device, "/dev/"), "mmcblk")
-		
+
 		for _, raid := range raids {
-			log.Printf("[NAS] Checking RAID %s: Disk1=%s, Disk2=%s against Device=%s\n", 
+			log.Printf("[NAS] Checking RAID %s: Disk1=%s, Disk2=%s against Device=%s\n",
 				raid.Name, raid.Disk1, raid.Disk2, req.Device)
-			
+
 			// Normalize device paths - handle various formats
 			disk1 := strings.TrimPrefix(raid.Disk1, "/dev/")
 			disk2 := strings.TrimPrefix(raid.Disk2, "/dev/")
-			
+
 			// Extract just the disk name (e.g., "sda" from "sda1" or "/dev/sda")
 			disk1Base := strings.Split(disk1, "p")[0] // Handle sda vs sdap1
 			disk1Base = strings.Split(disk1Base, "1")[0]
 			disk1Base = strings.Split(disk1Base, "2")[0]
-			
+
 			disk2Base := strings.Split(disk2, "p")[0]
 			disk2Base = strings.Split(disk2Base, "1")[0]
 			disk2Base = strings.Split(disk2Base, "2")[0]
-			
+
 			reqDeviceBase := strings.Split(reqDeviceNorm, "p")[0]
 			reqDeviceBase = strings.Split(reqDeviceBase, "1")[0]
 			reqDeviceBase = strings.Split(reqDeviceBase, "2")[0]
-			
+
 			log.Printf("[NAS] Normalized comparison: %s vs %s/%s\n", reqDeviceBase, disk1Base, disk2Base)
-			
+
 			if reqDeviceBase == disk1Base || reqDeviceBase == disk2Base {
 				log.Printf("[NAS] ⛔ Device %s is part of RAID array %s\n", req.Device, raid.Name)
 				return c.Status(409).JSON(fiber.Map{

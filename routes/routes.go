@@ -72,6 +72,8 @@ func SetupSetup(app *fiber.App) {
 	// Share Management
 	api.Get("/nas/shares", controllers.GetShares)
 	api.Post("/nas/shares", controllers.CreateShare)
+	api.Get("/nas/shares/diagnostic/all", controllers.GetShareDiagnostics)
+	api.Get("/nas/shares/:id/diagnostic", controllers.DiagnosticShare)
 	api.Delete("/nas/shares/:id", controllers.DeleteShare)
 
 	// Phase 4A: Advanced Permissions

@@ -5,6 +5,9 @@ import (
 	"api/models"
 	"api/services"
 	"fmt"
+	"os"
+	"os/exec"
+	"strings"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -110,4 +113,138 @@ func DeleteShare(c *fiber.Ctx) error {
 	database.DB.Unscoped().Delete(&share)
 
 	return c.JSON(fiber.Map{"message": "Share removed from database and Samba config"})
+}
+
+// DiagoseShare checks if a share is properly configured and accessible
+func DiagnosticShare(c *fiber.Ctx) error {
+	shareID := c.Params("id")
+
+	type DiagnosticResult struct {
+		ShareID      string   `json:"share_id"`
+		ShareName    string   `json:"share_name"`
+		SharePath    string   `json:"share_path"`
+		PathExists   bool     `json:"path_exists"`
+		PathWritable bool     `json:"path_writable"`
+		SambaRunning bool     `json:"samba_running"`
+		ConfigValid  bool     `json:"config_valid"`
+		Permissions  string   `json:"permissions"`
+		Issues       []string `json:"issues"`
+	}
+
+	result := DiagnosticResult{
+		ShareID: shareID,
+		Issues:  []string{},
+	}
+
+	// 1. Find share in database
+	var share models.Share
+	if err := database.DB.Where("id = ?", shareID).First(&share).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Share not found"})
+	}
+
+	result.ShareName = share.Name
+	result.SharePath = share.Path
+
+	// 2. Check if path exists
+	if _, err := os.Stat(share.Path); os.IsNotExist(err) {
+		result.PathExists = false
+		result.Issues = append(result.Issues, fmt.Sprintf("Share path does not exist: %s", share.Path))
+	} else {
+		result.PathExists = true
+
+		// 3. Check if path is writable
+		testFile := share.Path + "/.samba_write_test"
+		if err := os.WriteFile(testFile, []byte("test"), 0644); err != nil {
+			result.PathWritable = false
+			result.Issues = append(result.Issues, fmt.Sprintf("Share path is not writable: %v", err))
+		} else {
+			result.PathWritable = true
+			os.Remove(testFile) // cleanup
+		}
+
+		// 4. Check permissions
+		info, _ := os.Stat(share.Path)
+		result.Permissions = info.Mode().String()
+	}
+
+	// 5. Check if Samba is running
+	cmd := exec.Command("sudo", "systemctl", "is-active", "smbd")
+	if err := cmd.Run(); err != nil {
+		result.SambaRunning = false
+		result.Issues = append(result.Issues, "Samba daemon (smbd) is not running")
+	} else {
+		result.SambaRunning = true
+	}
+
+	// 6. Validate smb.conf contains this share
+	cmd = exec.Command("sudo", "testparm", "-s")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		result.ConfigValid = false
+		result.Issues = append(result.Issues, "smb.conf validation failed")
+	} else {
+		configStr := string(output)
+		if !strings.Contains(configStr, "["+share.Name+"]") {
+			result.ConfigValid = false
+			result.Issues = append(result.Issues, fmt.Sprintf("Share [%s] not found in smb.conf", share.Name))
+		} else {
+			result.ConfigValid = true
+		}
+	}
+
+	// If no issues, add success message
+	if len(result.Issues) == 0 {
+		result.Issues = []string{"✅ Share is fully configured and accessible"}
+	}
+
+	return c.JSON(result)
+}
+
+// GetShareDiagnostics checks all shares for issues
+func GetShareDiagnostics(c *fiber.Ctx) error {
+	type ShareStatus struct {
+		ID     string   `json:"id"`
+		Name   string   `json:"name"`
+		Path   string   `json:"path"`
+		Status string   `json:"status"` // "OK", "WARNING", "ERROR"
+		Issues []string `json:"issues"`
+	}
+
+	var shares []models.Share
+	database.DB.Find(&shares)
+
+	if shares == nil {
+		shares = []models.Share{}
+	}
+
+	statuses := make([]ShareStatus, 0)
+
+	for _, share := range shares {
+		status := ShareStatus{
+			ID:     share.ID,
+			Name:   share.Name,
+			Path:   share.Path,
+			Status: "OK",
+			Issues: []string{},
+		}
+
+		// Check path exists
+		if _, err := os.Stat(share.Path); os.IsNotExist(err) {
+			status.Status = "ERROR"
+			status.Issues = append(status.Issues, fmt.Sprintf("Path does not exist: %s", share.Path))
+		} else {
+			// Check writable
+			testFile := share.Path + "/.test"
+			if err := os.WriteFile(testFile, []byte("test"), 0644); err != nil {
+				status.Status = "WARNING"
+				status.Issues = append(status.Issues, "Path exists but not writable")
+			} else {
+				os.Remove(testFile)
+			}
+		}
+
+		statuses = append(statuses, status)
+	}
+
+	return c.JSON(statuses)
 }

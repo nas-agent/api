@@ -693,11 +693,16 @@ func GetVolumes(c *fiber.Ctx) error {
 		CreatedAt  int64  `json:"created_at"`
 	}
 
-	var volumes []VolumeResponse
+	volumes := []*VolumeResponse{}
 
 	if err := database.DB.Table("volumes").Order("created_at DESC").Scan(&volumes).Error; err != nil {
 		log.Printf("[NAS] Error fetching volumes: %v\n", err)
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to fetch volumes"})
+	}
+
+	// Return empty array instead of null
+	if volumes == nil {
+		volumes = []*VolumeResponse{}
 	}
 
 	return c.JSON(volumes)

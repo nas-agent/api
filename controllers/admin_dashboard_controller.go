@@ -91,8 +91,8 @@ func GetAdminRecentActivity(c *fiber.Ctx) error {
 	var newUsers []models.User
 	database.DB.Order("created_at desc").Limit(5).Find(&newUsers)
 	for _, u := range newUsers {
-		timestamp := u.CreatedAt.UnixMilli()
-		if u.CreatedAt.IsZero() {
+		timestamp := u.CreatedAt
+		if timestamp == 0 {
 			timestamp = time.Now().UnixMilli()
 		}
 		activities = append(activities, AdminActivity{

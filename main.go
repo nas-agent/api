@@ -107,7 +107,13 @@ func startUDPDiscoveryListener() {
 		}
 		defer conn.Close()
 
+		// Set socket to reuse address
+		if err := conn.SetReadBuffer(1024); err != nil {
+			log.Printf("⚠️  Failed to set read buffer: %v", err)
+		}
+
 		log.Println("✓ UDP Discovery listener started on port 9999")
+		log.Println("  Waiting for discovery broadcasts...")
 
 		buffer := make([]byte, 1024)
 		for {
@@ -118,14 +124,19 @@ func startUDPDiscoveryListener() {
 			}
 
 			message := string(buffer[:n])
+			log.Printf("📡 Received UDP message from %s: %q", remoteAddr.String(), message)
+
 			if message == "WHO_IS_NAS_API?" {
 				// Respond with API_HERE:3000
 				response := "API_HERE:3000"
 				_, err := conn.WriteToUDP([]byte(response), remoteAddr)
 				if err != nil {
-					log.Printf("UDP write error: %v", err)
+					log.Printf("❌ UDP write error: %v", err)
+					continue
 				}
-				log.Printf("📡 Responded to discovery request from %s", remoteAddr.String())
+				log.Printf("✅ Successfully responded to discovery request from %s", remoteAddr.String())
+			} else {
+				log.Printf("⚠️  Ignored non-discovery message: %q", message)
 			}
 		}
 	}()

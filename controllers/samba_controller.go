@@ -5,6 +5,7 @@ import (
 	"api/models"
 	"api/services"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"strings"
@@ -62,6 +63,49 @@ func CreateShare(c *fiber.Ctx) error {
 	} else {
 		// Public share
 		path = fmt.Sprintf("%s/shares/%s", volume.MountPoint, input.Name)
+	}
+
+	// 2.5 Create the share directory on disk if it doesn't exist
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		// Create parent directories with sudo if needed
+		mkdirCmd := exec.Command("sudo", "mkdir", "-p", path)
+		if output, err := mkdirCmd.CombinedOutput(); err != nil {
+			log.Printf("Warning: Failed to create share directory %s: %v, output: %s\n", path, err, string(output))
+			return c.Status(500).JSON(fiber.Map{"error": fmt.Sprintf("Failed to create share directory: %s", string(output))})
+		}
+		log.Printf("Created share directory: %s\n", path)
+	}
+
+	// 2.6 Set proper permissions on the share directory
+	if input.Type == models.ShareTypePrivate {
+		// Private share: set owner and permissions
+		var user models.User
+		database.DB.Where("id = ?", input.OwnerID).First(&user)
+
+		// chown user:sambashare path
+		chownCmd := exec.Command("sudo", "chown", fmt.Sprintf("%s:sambashare", user.Username), path)
+		if output, err := chownCmd.CombinedOutput(); err != nil {
+			log.Printf("Warning: Failed to chown %s: %v, output: %s\n", path, err, string(output))
+		}
+
+		// chmod 2770 path (group sticky bit, rwx for user and group)
+		chmodCmd := exec.Command("sudo", "chmod", "2770", path)
+		if output, err := chmodCmd.CombinedOutput(); err != nil {
+			log.Printf("Warning: Failed to chmod %s: %v, output: %s\n", path, err, string(output))
+		}
+	} else {
+		// Public share: world readable/writable
+		// chown nobody:sambashare path
+		chownCmd := exec.Command("sudo", "chown", "nobody:sambashare", path)
+		if output, err := chownCmd.CombinedOutput(); err != nil {
+			log.Printf("Warning: Failed to chown %s: %v, output: %s\n", path, err, string(output))
+		}
+
+		// chmod 2777 path (group sticky bit, rwx for all)
+		chmodCmd := exec.Command("sudo", "chmod", "2777", path)
+		if output, err := chmodCmd.CombinedOutput(); err != nil {
+			log.Printf("Warning: Failed to chmod %s: %v, output: %s\n", path, err, string(output))
+		}
 	}
 
 	// 3. Create in DB

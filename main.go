@@ -5,6 +5,7 @@ import (
 	"api/routes"
 	"api/services"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -91,6 +92,45 @@ func setupRun() bool {
 	return false
 }
 
+// startUDPDiscoveryListener starts a UDP listener for NAS API discovery
+// Responds to "WHO_IS_NAS_API?" broadcasts on port 9999
+func startUDPDiscoveryListener() {
+	go func() {
+		addr := net.UDPAddr{
+			Port: 9999,
+			IP:   net.ParseIP("0.0.0.0"),
+		}
+		conn, err := net.ListenUDP("udp", &addr)
+		if err != nil {
+			log.Printf("⚠️  Failed to start UDP discovery listener: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		log.Println("✓ UDP Discovery listener started on port 9999")
+
+		buffer := make([]byte, 1024)
+		for {
+			n, remoteAddr, err := conn.ReadFromUDP(buffer)
+			if err != nil {
+				log.Printf("UDP read error: %v", err)
+				continue
+			}
+
+			message := string(buffer[:n])
+			if message == "WHO_IS_NAS_API?" {
+				// Respond with API_HERE:3000
+				response := "API_HERE:3000"
+				_, err := conn.WriteToUDP([]byte(response), remoteAddr)
+				if err != nil {
+					log.Printf("UDP write error: %v", err)
+				}
+				log.Printf("📡 Responded to discovery request from %s", remoteAddr.String())
+			}
+		}
+	}()
+}
+
 func main() {
 	// Check and setup sudoers configuration
 	checkSudoersConfig()
@@ -103,6 +143,9 @@ func main() {
 
 	// Initialize File Watcher Service
 	services.InitFileWatcher()
+
+	// Start UDP Discovery Listener
+	startUDPDiscoveryListener()
 
 	// Initialize Fiber App
 	app := fiber.New()

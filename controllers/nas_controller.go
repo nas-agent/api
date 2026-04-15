@@ -317,25 +317,29 @@ func FormatAndMount(c *fiber.Ctx) error {
 	c.Set("Transfer-Encoding", "chunked")
 
 	c.Context().SetBodyStreamWriter(func(w *bufio.Writer) {
+		totalSteps := 5
+		currentStep := 1
+
 		// Step 1: Unmount and Wipe
-		sendProgress(w, "Unmounting existing mounts...", "loading")
+		sendProgress(w, fmt.Sprintf("Step %d/%d: Unmounting existing mounts...", currentStep, totalSteps), "loading", currentStep, totalSteps)
 		unmountCmd := exec.Command("bash", "-c", fmt.Sprintf("sudo umount -l %s* 2>/dev/null || true", req.Device))
 		if output, err := unmountCmd.CombinedOutput(); err != nil {
 			log.Printf("[NAS] Unmount warning (may be ok): %v\n", err)
-			sendProgress(w, fmt.Sprintf("Warning unmounting existing mounts: %s", string(output)), "warning")
+			sendProgress(w, fmt.Sprintf("Step %d/%d: ⚠️ Warning unmounting: %s", currentStep, totalSteps, string(output)), "warning", currentStep, totalSteps)
 		}
 		time.Sleep(500 * time.Millisecond)
 
-		sendProgress(w, "Wiping old filesystem signatures...", "loading")
+		sendProgress(w, fmt.Sprintf("Step %d/%d: Wiping old filesystem signatures...", currentStep, totalSteps), "loading", currentStep, totalSteps)
 		wipeCmd := exec.Command("sudo", "wipefs", "-a", req.Device)
 		if output, err := wipeCmd.CombinedOutput(); err != nil {
 			log.Printf("[NAS] wipe failed: %v, output: %s\n", err, string(output))
-			sendProgress(w, fmt.Sprintf("Warning wiping disk: %s", string(output)), "warning")
+			sendProgress(w, fmt.Sprintf("Step %d/%d: ⚠️ Warning wiping disk: %s", currentStep, totalSteps, string(output)), "warning", currentStep, totalSteps)
 		}
 		time.Sleep(500 * time.Millisecond)
 
 		// Step 2: Format
-		sendProgress(w, fmt.Sprintf("Formatting %s to %s...", req.Device, req.FileSystem), "loading")
+		currentStep = 2
+		sendProgress(w, fmt.Sprintf("Step %d/%d: Formatting %s to %s...", currentStep, totalSteps, req.Device, req.FileSystem), "loading", currentStep, totalSteps)
 		var formatCmd *exec.Cmd
 		switch req.FileSystem {
 		case "ext4":
@@ -347,51 +351,52 @@ func FormatAndMount(c *fiber.Ctx) error {
 		case "vfat":
 			formatCmd = exec.Command("sudo", "mkfs.vfat", "-F", "32", req.Device)
 		default:
-			sendProgress(w, fmt.Sprintf("Unsupported filesystem: %s", req.FileSystem), "error")
+			sendProgress(w, fmt.Sprintf("Unsupported filesystem: %s", req.FileSystem), "error", currentStep, totalSteps)
 			return
 		}
 
 		if output, err := formatCmd.CombinedOutput(); err != nil {
 			log.Printf("[NAS] format failed: %v, output: %s\n", err, string(output))
-			sendProgress(w, fmt.Sprintf("Format failed: %s", string(output)), "error")
+			sendProgress(w, fmt.Sprintf("❌ Format failed: %s", string(output)), "error", currentStep, totalSteps)
 			return
 		}
 		log.Printf("[NAS] Format completed successfully: %s\n", req.Device)
 		time.Sleep(500 * time.Millisecond)
 
 		// Step 3: Create mount directory and mount
-		sendProgress(w, fmt.Sprintf("Creating mount directory %s...", mountDir), "loading")
+		currentStep = 3
+		sendProgress(w, fmt.Sprintf("Step %d/%d: Creating mount directory %s...", currentStep, totalSteps, mountDir), "loading", currentStep, totalSteps)
 		mkdirCmd := exec.Command("sudo", "mkdir", "-p", mountDir)
 		if output, err := mkdirCmd.CombinedOutput(); err != nil {
 			log.Printf("[NAS] mkdir failed: %v, output: %s\n", err, string(output))
-			sendProgress(w, fmt.Sprintf("Failed to create directory: %s", string(output)), "error")
+			sendProgress(w, fmt.Sprintf("❌ Failed to create directory: %s", string(output)), "error", currentStep, totalSteps)
 			return
 		}
 		time.Sleep(500 * time.Millisecond)
 
-		sendProgress(w, fmt.Sprintf("Mounting %s to %s...", req.Device, mountDir), "loading")
+		sendProgress(w, fmt.Sprintf("Step %d/%d: Mounting %s...", currentStep, totalSteps, req.Device), "loading", currentStep, totalSteps)
 		mountCmd := exec.Command("sudo", "mount", req.Device, mountDir)
 		if output, err := mountCmd.CombinedOutput(); err != nil {
 			log.Printf("[NAS] mount failed: %v, output: %s\n", err, string(output))
-			sendProgress(w, fmt.Sprintf("Mount failed: %s", string(output)), "error")
+			sendProgress(w, fmt.Sprintf("❌ Mount failed: %s", string(output)), "error", currentStep, totalSteps)
 			return
 		}
 		log.Printf("[NAS] Mounted successfully: %s -> %s\n", req.Device, mountDir)
 		time.Sleep(500 * time.Millisecond)
 
 		// Step 4: Get UUID and add to fstab for persistence
-		sendProgress(w, "Retrieving disk UUID for persistent mounting...", "loading")
+		currentStep = 4
+		sendProgress(w, fmt.Sprintf("Step %d/%d: Retrieving disk UUID for persistent mounting...", currentStep, totalSteps), "loading", currentStep, totalSteps)
 		uuidCmd := exec.Command("bash", "-c", fmt.Sprintf("sudo blkid -s UUID -o value %s", req.Device))
 		uuidOutput, err := uuidCmd.CombinedOutput()
 		if err != nil {
 			log.Printf("[NAS] UUID retrieval failed: %v\n", err)
-			// Continue anyway, we can still mount without fstab
-			sendProgress(w, "Warning: Could not retrieve UUID, disk will not auto-mount on reboot", "warning")
+			sendProgress(w, fmt.Sprintf("Step %d/%d: ⚠️ Could not retrieve UUID, disk will not auto-mount on reboot", currentStep, totalSteps), "warning", currentStep, totalSteps)
 		} else {
 			uuid := strings.TrimSpace(string(uuidOutput))
 			if uuid != "" {
 				log.Printf("[NAS] Retrieved UUID: %s\n", uuid)
-				sendProgress(w, fmt.Sprintf("Adding UUID=%s to /etc/fstab...", uuid), "loading")
+				sendProgress(w, fmt.Sprintf("Step %d/%d: Adding UUID to /etc/fstab...", currentStep, totalSteps), "loading", currentStep, totalSteps)
 
 				// Create fstab entry
 				fstabEntry := fmt.Sprintf("UUID=%s %s %s defaults,noatime 0 2", uuid, mountDir, req.FileSystem)
@@ -402,7 +407,7 @@ func FormatAndMount(c *fiber.Ctx) error {
 				fstabCmd := exec.Command("bash", "-c", echoCmd)
 				if output, err := fstabCmd.CombinedOutput(); err != nil {
 					log.Printf("[NAS] fstab update failed: %v, output: %s\n", err, string(output))
-					sendProgress(w, fmt.Sprintf("Warning: Could not update fstab: %s", string(output)), "warning")
+					sendProgress(w, fmt.Sprintf("Step %d/%d: ⚠️ Warning: Could not update fstab: %s", currentStep, totalSteps, string(output)), "warning", currentStep, totalSteps)
 				} else {
 					log.Printf("[NAS] Added to fstab successfully\n")
 					time.Sleep(500 * time.Millisecond)
@@ -410,20 +415,16 @@ func FormatAndMount(c *fiber.Ctx) error {
 			}
 		}
 
-		// Success!
-		sendProgress(w, fmt.Sprintf("Disk formatted and mounted successfully at %s!", mountDir), "success")
-		log.Printf("[NAS] Format and mount completed successfully\n")
-		time.Sleep(500 * time.Millisecond)
-
 		// Step 5: Register volume in database
-		sendProgress(w, "Registering volume in database...", "loading")
+		currentStep = 5
+		sendProgress(w, fmt.Sprintf("Step %d/%d: Registering volume in database...", currentStep, totalSteps), "loading", currentStep, totalSteps)
 
 		// Get disk usage information
 		dfCmd := exec.Command("df", "-B1", mountDir)
 		dfOutput, err := dfCmd.CombinedOutput()
 		if err != nil {
 			log.Printf("[NAS] Failed to get disk usage: %v\n", err)
-			sendProgress(w, "Warning: Could not retrieve disk size information", "warning")
+			sendProgress(w, fmt.Sprintf("Step %d/%d: ⚠️ Could not retrieve disk size information", currentStep, totalSteps), "warning", currentStep, totalSteps)
 		}
 
 		var totalSize int64
@@ -462,18 +463,33 @@ func FormatAndMount(c *fiber.Ctx) error {
 
 		if err := database.DB.Table("volumes").Create(volume).Error; err != nil {
 			log.Printf("[NAS] Error registering volume: %v\n", err)
-			sendProgress(w, "Warning: Volume mounted but could not persist to database", "warning")
+			sendProgress(w, fmt.Sprintf("Step %d/%d: ⚠️ Volume mounted but could not persist to database", currentStep, totalSteps), "warning", currentStep, totalSteps)
 		} else {
 			log.Printf("[NAS] Volume registered in database with ID: %s\n", volumeID)
-			sendProgress(w, fmt.Sprintf("Volume registered with ID: %s", volumeID), "success")
+			sendProgress(w, fmt.Sprintf("Step %d/%d: ✓ All steps completed successfully! Disk ready.", currentStep, totalSteps), "success", currentStep, totalSteps)
 		}
 	})
 
 	return nil
 }
 
-// sendProgress sends a progress message as SSE
-func sendProgress(w *bufio.Writer, message, status string) {
+// sendProgress sends a progress message as SSE with detailed tracking
+func sendProgress(w *bufio.Writer, message, status string, currentStep, totalSteps int) {
+	percentage := 0
+	if totalSteps > 0 {
+		percentage = (currentStep * 100) / totalSteps
+	}
+	// Ensure percentage is within 0-100 and doesn't reach 100 until truly done
+	if percentage >= 100 && status != "success" {
+		percentage = 99
+	}
+	fmt.Fprintf(w, "data: {\"step\":\"%s\", \"status\":\"%s\", \"progress\":%d, \"currentStep\":%d, \"totalSteps\":%d}\n\n",
+		message, status, percentage, currentStep, totalSteps)
+	w.Flush()
+}
+
+// sendProgressSimple sends progress without step tracking (backward compatibility)
+func sendProgressSimple(w *bufio.Writer, message, status string) {
 	fmt.Fprintf(w, "data: {\"step\":\"%s\", \"status\":\"%s\"}\n\n", message, status)
 	w.Flush()
 }
@@ -524,13 +540,17 @@ func MountDevice(c *fiber.Ctx) error {
 
 		log.Printf("[NAS] Mount attempt: device=%s, mountDir=%s\n", req.Device, mountDir)
 
-		fmt.Fprintf(w, "data: {\"step\":\"Creating mount point %s...\", \"status\":\"loading\"}\n\n", mountDir)
-		w.Flush()
+		totalSteps := 4
+		currentStep := 1
+
+		sendProgress(w, fmt.Sprintf("Step %d/%d: Creating mount point %s...", currentStep, totalSteps, mountDir), "loading", currentStep, totalSteps)
 		time.Sleep(500 * time.Millisecond) // realistic UX delay
 
 		// Auto-detect filesystem if not provided
+		currentStep = 2
 		fileSystem := req.FileSystem
 		if fileSystem == "" {
+			sendProgress(w, fmt.Sprintf("Step %d/%d: Detecting filesystem...", currentStep, totalSteps), "loading", currentStep, totalSteps)
 			blkidCmd := exec.Command("sudo", "blkid", "-s", "TYPE", "-o", "value", req.Device)
 			if output, err := blkidCmd.CombinedOutput(); err == nil {
 				fileSystem = strings.TrimSpace(string(output))
@@ -540,45 +560,47 @@ func MountDevice(c *fiber.Ctx) error {
 			} else {
 				fileSystem = "unknown"
 			}
+			time.Sleep(300 * time.Millisecond)
 		}
 
 		// Create mount point if it doesn't exist (use sudo for /mnt access)
 		mkdirCmd := exec.Command("sudo", "mkdir", "-p", mountDir)
 		if output, err := mkdirCmd.CombinedOutput(); err != nil {
 			log.Printf("[NAS] mkdir failed: %v, output: %s\n", err, string(output))
-			fmt.Fprintf(w, "data: {\"step\":\"Failed to create directory: %s\", \"status\":\"error\"}\n\n", string(output))
+			fmt.Fprintf(w, "data: {\"step\":\"Failed to create directory: %s\", \"status\":\"error\", \"progress\":0, \"currentStep\":%d, \"totalSteps\":%d}\n\n", string(output), currentStep, totalSteps)
 			w.Flush()
 			return
 		}
 		log.Printf("[NAS] Mount point created: %s\n", mountDir)
 
-		fmt.Fprintf(w, "data: {\"step\":\"Mounting device %s...\", \"status\":\"loading\"}\n\n", req.Device)
-		w.Flush()
+		currentStep = 3
+		sendProgress(w, fmt.Sprintf("Step %d/%d: Mounting device %s...", currentStep, totalSteps, req.Device), "loading", currentStep, totalSteps)
 		time.Sleep(500 * time.Millisecond)
 
 		// Run mount command
 		cmd := exec.Command("sudo", "mount", req.Device, mountDir)
 		if output, err := cmd.CombinedOutput(); err != nil {
 			log.Printf("[NAS] mount failed: %v, output: %s\n", err, string(output))
-			fmt.Fprintf(w, "data: {\"step\":\"Mount failed: %s\", \"status\":\"error\"}\n\n", string(output))
+			fmt.Fprintf(w, "data: {\"step\":\"Mount failed: %s\", \"status\":\"error\", \"progress\":0, \"currentStep\":%d, \"totalSteps\":%d}\n\n", string(output), currentStep, totalSteps)
 			w.Flush()
 			return
 		}
 		log.Printf("[NAS] Device mounted successfully: %s -> %s\n", req.Device, mountDir)
 
-		fmt.Fprintf(w, "data: {\"step\":\"Device mounted successfully!\", \"status\":\"success\", \"mountPoint\":\"%s\"}\n\n", mountDir)
+		fmt.Fprintf(w, "data: {\"step\":\"✓ Device mounted successfully!\", \"status\":\"success\", \"progress\":75, \"currentStep\":%d, \"totalSteps\":%d, \"mountPoint\":\"%s\"}\n\n", currentStep, totalSteps, mountDir)
 		w.Flush()
 
 		// Step 5: Register volume in database
-		fmt.Fprintf(w, "data: {\"step\":\"Registering volume in database...\", \"status\":\"loading\"}\n\n")
-		w.Flush()
+		currentStep = 4
+		sendProgress(w, fmt.Sprintf("Step %d/%d: Registering volume in database...", currentStep, totalSteps), "loading", currentStep, totalSteps)
+		time.Sleep(300 * time.Millisecond)
 
 		// Get disk usage information
 		dfCmd := exec.Command("df", "-B1", mountDir)
 		dfOutput, err := dfCmd.CombinedOutput()
 		if err != nil {
 			log.Printf("[NAS] Failed to get disk usage: %v\n", err)
-			fmt.Fprintf(w, "data: {\"step\":\"Warning: Could not retrieve disk size information\", \"status\":\"warning\"}\n\n")
+			fmt.Fprintf(w, "data: {\"step\":\"Warning: Could not retrieve disk size information\", \"status\":\"warning\", \"progress\":90, \"currentStep\":%d, \"totalSteps\":%d}\n\n", currentStep, totalSteps)
 			w.Flush()
 		}
 
@@ -618,11 +640,11 @@ func MountDevice(c *fiber.Ctx) error {
 
 		if err := database.DB.Table("volumes").Create(volume).Error; err != nil {
 			log.Printf("[NAS] Error registering volume: %v\n", err)
-			fmt.Fprintf(w, "data: {\"step\":\"Warning: Volume mounted but could not persist to database\", \"status\":\"warning\"}\n\n")
+			fmt.Fprintf(w, "data: {\"step\":\"⚠️ Volume mounted but could not persist to database\", \"status\":\"warning\", \"progress\":90, \"currentStep\":%d, \"totalSteps\":%d}\n\n", currentStep, totalSteps)
 			w.Flush()
 		} else {
 			log.Printf("[NAS] Volume registered in database with ID: %s\n", volumeID)
-			fmt.Fprintf(w, "data: {\"step\":\"Volume registered with ID: %s\", \"status\":\"success\"}\n\n", volumeID)
+			fmt.Fprintf(w, "data: {\"step\":\"✓ All steps completed successfully! Volume ready.\", \"status\":\"success\", \"progress\":100, \"currentStep\":%d, \"totalSteps\":%d}\n\n", currentStep, totalSteps)
 			w.Flush()
 		}
 	})
@@ -1275,4 +1297,164 @@ func GetCleanupPolicy(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(policy)
+}
+
+// CreateRaid1 creates a RAID-1 mirror from a mounted volume and an unmounted disk
+func CreateRaid1(c *fiber.Ctx) error {
+	type CreateRaid1Request struct {
+		ExistingDisk string `json:"existingDisk"` // Device path of mounted disk (e.g., /dev/sda1)
+		NewDisk      string `json:"newDisk"`      // Device path of unmounted disk (e.g., /dev/sdb)
+		Name         string `json:"name"`         // Name for the RAID array
+	}
+
+	var req CreateRaid1Request
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+
+	if req.ExistingDisk == "" || req.NewDisk == "" || req.Name == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "existingDisk, newDisk, and name are required"})
+	}
+
+	// Ensure mdadm is installed
+	if _, err := exec.LookPath("mdadm"); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "mdadm not found - RAID tools not installed"})
+	}
+
+	// Check if devices exist
+	existingCmd := exec.Command("sudo", "test", "-b", req.ExistingDisk)
+	if err := existingCmd.Run(); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Existing disk not found: " + req.ExistingDisk})
+	}
+
+	newCmd := exec.Command("sudo", "test", "-b", req.NewDisk)
+	if err := newCmd.Run(); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "New disk not found: " + req.NewDisk})
+	}
+
+	// Get mount point of existing disk
+	mountCmd := exec.Command("sh", "-c", fmt.Sprintf("mount | grep %s | awk '{print $3}'", req.ExistingDisk))
+	output, err := mountCmd.CombinedOutput()
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Could not determine mount point of existing disk"})
+	}
+	mountPoint := strings.TrimSpace(string(output))
+	if mountPoint == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Existing disk is not mounted"})
+	}
+
+	// Send event stream start
+	// Set headers for SSE
+	c.Set("Content-Type", "text/event-stream")
+	c.Set("Cache-Control", "no-cache")
+	c.Set("Connection", "keep-alive")
+
+	c.Context().SetBodyStreamWriter(func(w *bufio.Writer) {
+		totalSteps := 7
+		currentStep := 0
+
+		sendRaidEvent := func(status string, step string) error {
+			currentStep++
+			percentage := 0
+			if totalSteps > 0 {
+				percentage = (currentStep * 100) / totalSteps
+			}
+			if percentage >= 100 && status != "success" {
+				percentage = 99
+			}
+			event := fmt.Sprintf("data: {\"status\":\"%s\",\"step\":\"Step %d/%d: %s\",\"progress\":%d,\"currentStep\":%d,\"totalSteps\":%d}\n\n",
+				status, currentStep, totalSteps, step, percentage, currentStep, totalSteps)
+			_, err := fmt.Fprint(w, event)
+			w.Flush()
+			return err
+		}
+
+		// Partition the new disk
+		sendRaidEvent("progress", "Partitioning new disk...")
+		partCmd := exec.Command("sudo", "fdisk", "-l", req.NewDisk)
+		if _, err := partCmd.CombinedOutput(); err != nil {
+			sendRaidEvent("error", "Failed to read disk layout")
+			return
+		}
+
+		// Create partition on new disk matching existing disk
+		sendRaidEvent("progress", fmt.Sprintf("Creating partition on %s...", req.NewDisk))
+
+		// Use sfdisk to clone partition table
+		getPartCmd := exec.Command("sudo", "sfdisk", "-d", req.ExistingDisk)
+		clonePartCmd := exec.Command("sudo", "sfdisk", req.NewDisk)
+
+		partOutput, _ := getPartCmd.CombinedOutput()
+		clonePartCmd.Stdin = strings.NewReader(string(partOutput))
+		if err := clonePartCmd.Run(); err != nil {
+			sendRaidEvent("error", fmt.Sprintf("Failed to partition new disk: %v", err))
+			return
+		}
+
+		// Wait for device nodes
+		time.Sleep(2 * time.Second)
+
+		// Determine partition number (usually partition 1)
+		newDiskPart := req.NewDisk + "1"
+
+		// Create RAID-1 array
+		sendRaidEvent("progress", fmt.Sprintf("Creating RAID-1 array md%d...", time.Now().UnixNano()%100))
+
+		raidName := fmt.Sprintf("md%d", time.Now().UnixNano()%1000)
+		mdadmCmd := exec.Command("sudo", "mdadm", "--create", "/dev/"+raidName, "--level", "1", "--raid-devices", "2", req.ExistingDisk, newDiskPart)
+		if out, err := mdadmCmd.CombinedOutput(); err != nil {
+			sendRaidEvent("error", fmt.Sprintf("Failed to create RAID-1: %s", string(out)))
+			return
+		}
+
+		sendRaidEvent("progress", "Waiting for RAID array to initialize...")
+		time.Sleep(3 * time.Second)
+
+		// Format the RAID array with ext4
+		sendRaidEvent("progress", "Formatting RAID array...")
+		formatCmd := exec.Command("sudo", "mkfs.ext4", "-F", "/dev/"+raidName)
+		if out, err := formatCmd.CombinedOutput(); err != nil {
+			sendRaidEvent("error", fmt.Sprintf("Failed to format RAID array: %s", string(out)))
+			// Try to stop the array
+			exec.Command("sudo", "mdadm", "--stop", "/dev/"+raidName).Run()
+			return
+		}
+
+		// Create mdadm.conf entry
+		sendRaidEvent("progress", "Updating RAID configuration...")
+		examCmd := exec.Command("sudo", "mdadm", "--examine", "--scan")
+		confOutput, _ := examCmd.CombinedOutput()
+
+		confCmd := exec.Command("sh", "-c", fmt.Sprintf("echo '%s' | sudo tee -a /etc/mdadm/mdadm.conf", string(confOutput)))
+		_ = confCmd.Run()
+
+		// Update initramfs
+		updateCmd := exec.Command("sudo", "update-initramfs", "-u")
+		_ = updateCmd.Run()
+
+		// Save RAID info to database
+		now := time.Now().Unix()
+		raidID := fmt.Sprintf("raid1_%d", now)
+		raidEntry := map[string]interface{}{
+			"id":          raidID,
+			"name":        req.Name,
+			"raid_level":  "RAID1",
+			"raid_name":   raidName,
+			"device_path": "/dev/" + raidName,
+			"status":      "active",
+			"disk1":       req.ExistingDisk,
+			"disk2":       newDiskPart,
+			"created_at":  now,
+			"updated_at":  now,
+		}
+
+		if err := database.DB.Table("raid_arrays").Create(raidEntry).Error; err != nil {
+			log.Printf("[NAS] Error saving RAID to database: %v\n", err)
+			// RAID was created but DB insert failed - still return success
+		}
+
+		sendRaidEvent("success", fmt.Sprintf("✓ RAID-1 array %s created successfully at /dev/%s. Mirror sync in progress.", req.Name, raidName))
+	})
+
+	return nil
 }

@@ -210,19 +210,24 @@ func DiagnosticShare(c *fiber.Ctx) error {
 	} else {
 		result.PathExists = true
 
-		// 3. Check if path is writable
-		testFile := share.Path + "/.samba_write_test"
-		if err := os.WriteFile(testFile, []byte("test"), 0644); err != nil {
-			result.PathWritable = false
-			result.Issues = append(result.Issues, fmt.Sprintf("Share path is not writable: %v", err))
-		} else {
-			result.PathWritable = true
-			os.Remove(testFile) // cleanup
-		}
-
-		// 4. Check permissions
+		// 3. Get detailed file info
 		info, _ := os.Stat(share.Path)
 		result.Permissions = info.Mode().String()
+
+		// 3.5 Check if directory (should be)
+		if !info.IsDir() {
+			result.Issues = append(result.Issues, "Share path is not a directory")
+		}
+
+		// 4. Check if path is writable using shell command with sudo
+		// This is more reliable than os.WriteFile for checking permissions
+		testCmd := exec.Command("sudo", "test", "-w", share.Path)
+		if err := testCmd.Run(); err != nil {
+			result.PathWritable = false
+			result.Issues = append(result.Issues, fmt.Sprintf("Share path is not writable (sudo test -w failed): %v", err))
+		} else {
+			result.PathWritable = true
+		}
 	}
 
 	// 5. Check if Samba is running
@@ -291,13 +296,11 @@ func GetShareDiagnostics(c *fiber.Ctx) error {
 			status.Status = "ERROR"
 			status.Issues = append(status.Issues, fmt.Sprintf("Path does not exist: %s", share.Path))
 		} else {
-			// Check writable
-			testFile := share.Path + "/.test"
-			if err := os.WriteFile(testFile, []byte("test"), 0644); err != nil {
+			// Check writable using sudo test -w (more reliable)
+			testCmd := exec.Command("sudo", "test", "-w", share.Path)
+			if err := testCmd.Run(); err != nil {
 				status.Status = "WARNING"
 				status.Issues = append(status.Issues, "Path exists but not writable")
-			} else {
-				os.Remove(testFile)
 			}
 		}
 

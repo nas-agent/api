@@ -934,8 +934,20 @@ func UnmountDevice(c *fiber.Ctx) error {
 	c.Set("Transfer-Encoding", "chunked")
 
 	c.Context().SetBodyStreamWriter(func(w *bufio.Writer) {
-		totalSteps := 3
+		totalSteps := 4
 		currentStep := 1
+
+		// Step 0: Try to find the volume in the database to get its true mount point and ID
+		var volume models.Volume
+		dbResult := database.DB.Where("mount_point = ? OR device_path = ?", target, target).First(&volume)
+		
+		// If we found it, use the official mount point for all operations
+		if dbResult.Error == nil && volume.MountPoint != "" {
+			target = volume.MountPoint
+			log.Printf("[NAS] Resolved unmount target for %s -> %s (ID: %s)\n", req.Device, target, volume.ID)
+		} else {
+			log.Printf("[NAS] Warning: Could not find volume in database for target %s, proceeding with raw path\n", target)
+		}
 
 		// Step 1: Attempt normal unmount
 		fmt.Fprintf(w, "data: {\"step\":\"Step %d/%d: Attempting to unmount %s...\", \"status\":\"loading\", \"progress\":0, \"currentStep\":%d, \"totalSteps\":%d}\n\n", currentStep, totalSteps, target, currentStep, totalSteps)
@@ -953,7 +965,7 @@ func UnmountDevice(c *fiber.Ctx) error {
 			// Check if target is busy - try lazy unmount
 			if strings.Contains(errMsg, "busy") || strings.Contains(errMsg, "Device or resource busy") {
 				currentStep = 2
-				fmt.Fprintf(w, "data: {\"step\":\"Step %d/%d: Mount point busy, attempting lazy unmount...\", \"status\":\"loading\", \"progress\":33, \"currentStep\":%d, \"totalSteps\":%d}\n\n", currentStep, totalSteps, currentStep, totalSteps)
+				fmt.Fprintf(w, "data: {\"step\":\"Step %d/%d: Mount point busy, attempting lazy unmount...\", \"status\":\"loading\", \"progress\":25, \"currentStep\":%d, \"totalSteps\":%d}\n\n", currentStep, totalSteps, currentStep, totalSteps)
 				w.Flush()
 				time.Sleep(500 * time.Millisecond)
 
@@ -968,7 +980,7 @@ func UnmountDevice(c *fiber.Ctx) error {
 					// Last resort: try force unmount
 					if strings.Contains(errMsg, "busy") || strings.Contains(errMsg, "Device or resource busy") {
 						currentStep = 2
-						fmt.Fprintf(w, "data: {\"step\":\"Step %d/%d: Lazy unmount failed, attempting force unmount...\", \"status\":\"loading\", \"progress\":33, \"currentStep\":%d, \"totalSteps\":%d}\n\n", currentStep, totalSteps, currentStep, totalSteps)
+						fmt.Fprintf(w, "data: {\"step\":\"Step %d/%d: Lazy unmount failed, attempting force unmount...\", \"status\":\"loading\", \"progress\":25, \"currentStep\":%d, \"totalSteps\":%d}\n\n", currentStep, totalSteps, currentStep, totalSteps)
 						w.Flush()
 						time.Sleep(500 * time.Millisecond)
 
@@ -990,14 +1002,12 @@ func UnmountDevice(c *fiber.Ctx) error {
 
 		// Step 3: Cleanup and update database
 		currentStep = 3
-		fmt.Fprintf(w, "data: {\"step\":\"Step %d/%d: Cleaning up mount directories and shares...\", \"status\":\"loading\", \"progress\":66, \"currentStep\":%d, \"totalSteps\":%d}\n\n", currentStep, totalSteps, currentStep, totalSteps)
+		fmt.Fprintf(w, "data: {\"step\":\"Step %d/%d: Cleaning up mount directories and shares...\", \"status\":\"loading\", \"progress\":50, \"currentStep\":%d, \"totalSteps\":%d}\n\n", currentStep, totalSteps, currentStep, totalSteps)
 		w.Flush()
 		time.Sleep(300 * time.Millisecond)
 
-		// Find volume by mount point to clean up associated shares
-		var volume models.Volume
-		if err := database.DB.Where("mount_point = ?", target).First(&volume).Error; err == nil {
-			// Delete all shares associated with this volume
+		// Delete all shares associated with this volume
+		if volume.ID != "" {
 			var shares []models.Share
 			if err := database.DB.Where("volume_id = ?", volume.ID).Find(&shares).Error; err == nil {
 				for _, share := range shares {
@@ -1010,19 +1020,37 @@ func UnmountDevice(c *fiber.Ctx) error {
 		}
 
 		// Remove mount directory if in /mnt or /media
-		if strings.HasPrefix(target, "/mnt/") || strings.HasPrefix(target, "/media/") {
-			// Use sudo rm -rf to remove directory and all contents
+		// BE CAREFUL: Only remove if it's a subdirectory, not /mnt itself!
+		if (strings.HasPrefix(target, "/mnt/") && len(target) > 5) || (strings.HasPrefix(target, "/media/") && len(target) > 7) {
+			log.Printf("[NAS] Physically removing mount point directory: %s\n", target)
+			// Use sudo rm -rf to remove directory
 			rmCmd := exec.Command("sudo", "rm", "-rf", target)
 			if output, err := rmCmd.CombinedOutput(); err != nil {
-				log.Printf("Warning: Failed to remove mount directory %s: %v, output: %s\n", target, err, string(output))
+				log.Printf("[NAS] Warning: Failed to remove mount directory %s: %v, output: %s\n", target, err, string(output))
 				// Continue anyway - unmount was successful
 			}
 		}
 
+		// Step 4: Update database status
+		currentStep = 4
+		fmt.Fprintf(w, "data: {\"step\":\"Step %d/%d: Updating database status...\", \"status\":\"loading\", \"progress\":75, \"currentStep\":%d, \"totalSteps\":%d}\n\n", currentStep, totalSteps, currentStep, totalSteps)
+		w.Flush()
+
 		// Update database: mark volume as unmounted
-		if err := database.DB.Model(&models.Volume{}).
-			Where("mount_point = ?", target).
-			Update("status", models.VolumeStatusUnmounted).Error; err != nil {
+		var updateErr error
+		if volume.ID != "" {
+			updateErr = database.DB.Model(&models.Volume{}).
+				Where("id = ?", volume.ID).
+				Update("status", models.VolumeStatusUnmounted).Error
+		} else {
+			// Fallback: search by path if we don't have ID
+			updateErr = database.DB.Model(&models.Volume{}).
+				Where("mount_point = ? OR device_path = ?", target, target).
+				Update("status", models.VolumeStatusUnmounted).Error
+		}
+
+		if updateErr != nil {
+			log.Printf("[NAS] Error updating volume status: %v\n", updateErr)
 			fmt.Fprintf(w, "data: {\"step\":\"⚠️ Device unmounted but database update failed\", \"status\":\"warning\"}\n\n")
 			w.Flush()
 		}

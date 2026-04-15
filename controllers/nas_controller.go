@@ -309,6 +309,23 @@ func FormatAndMount(c *fiber.Ctx) error {
 	lastChar := deviceName[len(deviceName)-1]
 	isPartition := lastChar >= '0' && lastChar <= '9'
 
+	// Check if device is part of any RAID arrays
+	var raids []models.RaidArray
+	if err := database.DB.Find(&raids).Error; err == nil {
+		for _, raid := range raids {
+			// Normalize device paths for comparison
+			disk1 := strings.TrimPrefix(raid.Disk1, "/dev/")
+			disk2 := strings.TrimPrefix(raid.Disk2, "/dev/")
+			reqDevice := strings.TrimPrefix(req.Device, "/dev/")
+			
+			if strings.Contains(disk1, reqDevice) || strings.Contains(disk2, reqDevice) {
+				return c.Status(409).JSON(fiber.Map{
+					"error": fmt.Sprintf("Device %s is part of RAID array %s. Please delete the RAID array first.", req.Device, raid.Name),
+				})
+			}
+		}
+	}
+
 	// For raw disks, we'll use the whole disk (e.g., /dev/sdb -> /dev/sdb1 after part init)
 	// But for safety, we require explicit partitioning first
 	if !isPartition {

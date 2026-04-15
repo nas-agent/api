@@ -58,8 +58,6 @@ func Register(c *fiber.Ctx) error {
 		Password:           string(password),
 		Role:               role,
 		PersonalFolderPath: fmt.Sprintf("/mnt/raid1/homes/%s", username),
-		CreatedAt:          time.Now().Unix(),
-		UpdatedAt:          time.Now().Unix(),
 	}
 
 	result := database.DB.Create(&user)

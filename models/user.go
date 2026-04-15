@@ -1,6 +1,8 @@
 package models
 
 import (
+	"time"
+
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -12,8 +14,8 @@ type User struct {
 	Password           string         `gorm:"not null" json:"-"`
 	Role               string         `gorm:"default:'user'" json:"role"`
 	PersonalFolderPath string         `json:"personal_folder_path"`
-	CreatedAt          int64          `json:"created_date"`
-	UpdatedAt          int64          `json:"updated_date"`
+	CreatedAt          time.Time      `gorm:"autoCreateTime" json:"created_date"`
+	UpdatedAt          time.Time      `gorm:"autoUpdateTime" json:"updated_date"`
 	DeletedAt          gorm.DeletedAt `gorm:"index" json:"deleted_date"`
 
 	// Relationships

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/gofiber/fiber/v2"
@@ -51,6 +52,93 @@ func checkSudoersConfig() {
 		log.Println("")
 	} else {
 		log.Println("✓ Sudoers configuration verified")
+	}
+}
+
+func resolveSambaHomeBase() string {
+	const defaultSambaHomeBase = "/srv/samba/homes"
+
+	homeBase := strings.TrimSpace(os.Getenv("SAMBA_HOME_BASE"))
+	if homeBase == "" {
+		homeBase = defaultSambaHomeBase
+		if err := os.Setenv("SAMBA_HOME_BASE", homeBase); err != nil {
+			log.Printf("⚠️  Failed to set SAMBA_HOME_BASE env: %v", err)
+		} else {
+			log.Printf("SAMBA_HOME_BASE was not set; using default: %s", homeBase)
+		}
+	} else {
+		log.Printf("Using SAMBA_HOME_BASE from environment: %s", homeBase)
+	}
+
+	services.Samba.HomeBase = homeBase
+	return homeBase
+}
+
+func getPathOwner(path string) (string, error) {
+	cmd := exec.Command("stat", "-c", "%U:%G", path)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func ensureSambaHomeBase(path string) {
+	changed := false
+
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Printf("Creating Samba home base directory: %s", path)
+			if out, mkdirErr := exec.Command("sudo", "mkdir", "-p", path).CombinedOutput(); mkdirErr != nil {
+				log.Printf("⚠️  Failed to create Samba home base %s: %v (%s)", path, mkdirErr, strings.TrimSpace(string(out)))
+				return
+			}
+			changed = true
+			info, err = os.Stat(path)
+			if err != nil {
+				log.Printf("⚠️  Failed to stat Samba home base %s after create: %v", path, err)
+				return
+			}
+		} else {
+			log.Printf("⚠️  Failed to stat Samba home base %s: %v", path, err)
+			return
+		}
+	}
+
+	if !info.IsDir() {
+		log.Printf("⚠️  SAMBA_HOME_BASE is not a directory: %s", path)
+		return
+	}
+
+	if info.Mode().Perm() != 0o755 {
+		log.Printf("Fixing permissions for Samba home base %s (current=%#o, target=0755)", path, info.Mode().Perm())
+		if out, chmodErr := exec.Command("sudo", "chmod", "755", path).CombinedOutput(); chmodErr != nil {
+			log.Printf("⚠️  Failed to chmod Samba home base %s: %v (%s)", path, chmodErr, strings.TrimSpace(string(out)))
+		} else {
+			changed = true
+		}
+	}
+
+	if owner, ownerErr := getPathOwner(path); ownerErr != nil {
+		log.Printf("⚠️  Failed to read owner for %s: %v", path, ownerErr)
+	} else if owner != "root:root" {
+		log.Printf("Fixing owner for Samba home base %s (current=%s, target=root:root)", path, owner)
+		if out, chownErr := exec.Command("sudo", "chown", "root:root", path).CombinedOutput(); chownErr != nil {
+			log.Printf("⚠️  Failed to chown Samba home base %s: %v (%s)", path, chownErr, strings.TrimSpace(string(out)))
+		} else {
+			changed = true
+		}
+	}
+
+	if changed {
+		if err := services.Samba.RestartService(); err != nil {
+			log.Printf("⚠️  Failed to restart smbd after Samba home base updates: %v", err)
+		} else {
+			log.Println("✓ Restarted smbd after Samba home base updates")
+		}
+	} else {
+		log.Printf("✓ Samba home base already configured: %s", path)
 	}
 }
 
@@ -266,6 +354,10 @@ func handleWebSocketNotifications(c *websocket.Conn) {
 func main() {
 	// Check and setup sudoers configuration
 	checkSudoersConfig()
+
+	// Resolve and prepare Samba base path on startup (idempotent)
+	homeBase := resolveSambaHomeBase()
+	ensureSambaHomeBase(homeBase)
 
 	// Initialize Database Connection and Auto-Migrate
 	database.ConnectDB()

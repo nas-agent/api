@@ -57,7 +57,7 @@ func Register(c *fiber.Ctx) error {
 		Email:              email,
 		Password:           string(password),
 		Role:               role,
-		PersonalFolderPath: fmt.Sprintf("/mnt/raid1/homes/%s", username),
+		PersonalFolderPath: fmt.Sprintf("%s/%s", services.Samba.HomeBase, username),
 		CreatedAt:          time.Now().Unix(),
 		UpdatedAt:          time.Now().Unix(),
 	}
@@ -79,8 +79,11 @@ func Register(c *fiber.Ctx) error {
 
 	// Sync to Samba
 	if err := services.Samba.SyncSambaUser(username, passwordStr); err != nil {
-		fmt.Printf("Warning: Failed to sync user to Samba: %v\n", err)
-		// We don't fail registration if Samba sync fails, but we log it.
+		database.DB.Unscoped().Where("id = ?", user.ID).Delete(&models.User{})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"message": "Failed to provision Samba account",
+			"error":   err.Error(),
+		})
 	}
 
 	return c.JSON(user)
@@ -168,6 +171,13 @@ func ChangePassword(c *fiber.Ctx) error {
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(data["old_password"])); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"message": "Incorrect old password",
+		})
+	}
+
+	if err := services.Samba.SetSambaPassword(user.Username, data["new_password"]); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"message": "Failed to update Samba password",
+			"error":   err.Error(),
 		})
 	}
 

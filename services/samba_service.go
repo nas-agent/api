@@ -3,6 +3,7 @@ package services
 import (
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -15,23 +16,62 @@ type SambaService struct {
 
 var Samba = &SambaService{
 	ConfigPath: "/etc/samba/smb.conf",
-	HomeBase:   "/mnt/raid1/homes",
+	HomeBase:   getSambaHomeBase(),
+}
+
+func getSambaHomeBase() string {
+	if v := strings.TrimSpace(os.Getenv("SAMBA_HOME_BASE")); v != "" {
+		return v
+	}
+	return "/mnt/raid1/homes"
+}
+
+func runSmbpasswd(username, password string, addUser bool) error {
+	input := fmt.Sprintf("%s\n%s\n", password, password)
+	args := []string{"smbpasswd", "-s"}
+	if addUser {
+		args = append(args, "-a")
+	}
+	args = append(args, username)
+
+	cmd := exec.Command("sudo", args...)
+	cmd.Stdin = strings.NewReader(input)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	return nil
+}
+
+func (s *SambaService) ensureLinuxUser(username string) {
+	// -M: no home dir (we manage it), -s /usr/sbin/nologin: no shell login
+	_ = exec.Command("sudo", "useradd", "-M", "-s", "/usr/sbin/nologin", username).Run()
+	_ = exec.Command("sudo", "groupadd", "-f", "sambashare").Run()
+	_ = exec.Command("sudo", "usermod", "-a", "-G", "sambashare", username).Run()
+}
+
+// SetSambaPassword updates password for an existing Samba user.
+// If the user does not exist in Samba DB yet, it creates the Samba user entry.
+func (s *SambaService) SetSambaPassword(username, password string) error {
+	s.ensureLinuxUser(username)
+
+	if err := runSmbpasswd(username, password, false); err != nil {
+		if addErr := runSmbpasswd(username, password, true); addErr != nil {
+			return fmt.Errorf("failed to set samba password for %s (update: %v, add: %v)", username, err, addErr)
+		}
+	}
+
+	if err := exec.Command("sudo", "smbpasswd", "-e", username).Run(); err != nil {
+		log.Printf("Warning: failed to enable samba user %s: %v", username, err)
+	}
+
+	return nil
 }
 
 // SyncSambaUser creates/updates a Linux system user and a Samba user
 func (s *SambaService) SyncSambaUser(username, password string) error {
-	// 1. Create Linux User if not exists
-	// -M: no home dir (we manage it), -s /usr/sbin/nologin: no shell login
-	cmd := exec.Command("sudo", "useradd", "-M", "-s", "/usr/sbin/nologin", username)
-	_ = cmd.Run() // Ignore error if user already exists
-
-	// 2. Create/Update Samba Password
-	// (echo "pass"; echo "pass") | sudo smbpasswd -s -a user
-	input := fmt.Sprintf("%s\n%s\n", password, password)
-	smbCmd := exec.Command("sudo", "smbpasswd", "-s", "-a", username)
-	smbCmd.Stdin = strings.NewReader(input)
-	if err := smbCmd.Run(); err != nil {
-		return fmt.Errorf("failed to set samba password: %v", err)
+	if err := s.SetSambaPassword(username, password); err != nil {
+		return err
 	}
 
 	// 3. Ensure Home Directory exists and has proper permissions
@@ -39,10 +79,10 @@ func (s *SambaService) SyncSambaUser(username, password string) error {
 	if err := exec.Command("sudo", "mkdir", "-p", homePath).Run(); err != nil {
 		return fmt.Errorf("failed to create home directory: %v", err)
 	}
-	if err := exec.Command("sudo", "chown", fmt.Sprintf("%s:sambashare", username), homePath).Run(); err != nil {
+	if err := exec.Command("sudo", "chown", fmt.Sprintf("%s:%s", username, username), homePath).Run(); err != nil {
 		log.Printf("Warning: failed to chown %s: %v", homePath, err)
 	}
-	if err := exec.Command("sudo", "chmod", "2770", homePath).Run(); err != nil {
+	if err := exec.Command("sudo", "chmod", "700", homePath).Run(); err != nil {
 		log.Printf("Warning: failed to chmod %s: %v", homePath, err)
 	}
 

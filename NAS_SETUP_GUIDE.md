@@ -2,6 +2,21 @@
 
 This guide explains how to configure your system for NAS mounting operations through the Go API.
 
+## Quick Bootstrap (Recommended)
+
+Run the project bootstrap once on your Raspberry Pi host:
+
+```bash
+cd api
+sudo ./bootstrap-api.sh
+```
+
+This will:
+- Check and install required Linux packages used by the Go API (`setup-api-deps.sh`)
+- Configure passwordless sudo rules for NAS mount operations (`setup-nas-sudo.sh`)
+
+For full package rationale, see `LINUX_PACKAGE_AUDIT.md`.
+
 ## Overview
 
 The NAS mounting feature in your Go API requires passwordless `sudo` access to the following commands:

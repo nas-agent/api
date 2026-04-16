@@ -2,6 +2,7 @@ package services
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"regexp"
@@ -44,6 +45,7 @@ func (pt *PathTranslator) TranslatePath(inputPath string) (string, error) {
 
 	// Case 1: Already a Linux path
 	if strings.HasPrefix(inputPath, "/") {
+		log.Printf("[PathTranslator] Path already Linux format: %s", inputPath)
 		return inputPath, nil
 	}
 
@@ -62,19 +64,34 @@ func (pt *PathTranslator) TranslatePath(inputPath string) (string, error) {
 		shareName := parts[1]
 		subpath := strings.Join(parts[2:], "/") // Convert remaining backslashes to forward slashes
 
-		// If host matches our RPI hostname or IP, it's a local Samba share
-		if strings.EqualFold(host, pt.RpiHostname) || host == pt.RpiIP {
-			if strings.ToLower(shareName) == "faan" || strings.HasPrefix(strings.ToLower(shareName), "faan-") {
-				// User share
-				result := pt.SambaHomeBase + "/" + shareName
-				if subpath != "" {
-					result += "/" + subpath
-				}
-				return result, nil
+		// Check if host matches our RPI hostname or IP
+		isLocalHost := strings.EqualFold(host, pt.RpiHostname) || host == pt.RpiIP
+
+		// Smart fallback: if host is an IP address and doesn't match our RPI,
+		// still attempt translation (might be the RPI under a different IP)
+		// Example: \\192.168.100.195\faan could be the RPI accessed via different network
+		if !isLocalHost {
+			// Try to parse as IP - if it's an IP address, it's likely pointing to the RPI network
+			isIPAddress := strings.Count(host, ".") == 3 || strings.Contains(host, ":")
+			if !isIPAddress {
+				// It's a hostname but doesn't match ours
+				return "", fmt.Errorf("unknown SMB host: %s", host)
 			}
+			// For IP addresses that don't match exactly, assume they're referring to the RPI
+			isLocalHost = true
 		}
 
-		return "", fmt.Errorf("unknown SMB host or share: %s", inputPath)
+		if isLocalHost {
+			// Build path: Samba home base + share name + subpath
+			result := pt.SambaHomeBase + "/" + shareName
+			if subpath != "" {
+				result += "/" + subpath
+			}
+			log.Printf("[PathTranslator] Translated UNC path: %s -> %s", inputPath, result)
+			return result, nil
+		}
+
+		return "", fmt.Errorf("unknown SMB host: %s", host)
 	}
 
 	// Case 3: Windows drive letter format (Z:\path)
@@ -85,14 +102,25 @@ func (pt *PathTranslator) TranslatePath(inputPath string) (string, error) {
 		driveLetter := strings.ToUpper(matches[1])
 		windowsPath := matches[2]
 
-		// Check if we have a mapping for this drive letter
+		// Check if we have a registered mapping for this drive letter
 		if baseMapping, exists := pt.DriveLetterMappings[driveLetter]; exists {
 			// Convert Windows backslashes to forward slashes
 			unixPath := strings.ReplaceAll(windowsPath, "\\", "/")
-			return baseMapping + "/" + unixPath, nil
+			result := baseMapping + "/" + unixPath
+			log.Printf("[PathTranslator] Translated Windows path (registered): %s -> %s", inputPath, result)
+			return result, nil
 		}
 
-		return "", fmt.Errorf("unknown drive letter mapping: %s:", driveLetter)
+		// Smart fallback: assume unknown Windows drive letters map to Samba home base
+		// This is reasonable because:
+		// - Most Windows clients access SMB shares through mapped drive letters
+		// - All mapped drives likely point to the same Samba server
+		// - So Z:\faan, Y:\faan, etc. all resolve to /srv/samba/homes/faan
+		// Example: Z:\faan\Documents -> /srv/samba/homes/faan/Documents
+		unixPath := strings.ReplaceAll(windowsPath, "\\", "/")
+		result := pt.SambaHomeBase + "/" + unixPath
+		log.Printf("[PathTranslator] Translated Windows path (auto-detected): %s -> %s (assumed drive letter maps to Samba home)", inputPath, result)
+		return result, nil
 	}
 
 	return "", fmt.Errorf("unsupported path format: %s", inputPath)

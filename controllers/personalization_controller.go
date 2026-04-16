@@ -92,26 +92,36 @@ func GetPersonalizationProfile(c *fiber.Ctx) error {
 	if userAIConfig.DestinationPath != "" {
 		// Clean the path to handle potential mixed slashes
 		root = filepath.Clean(userAIConfig.DestinationPath)
-		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				// Log but continue to find other accessible folders
-				fmt.Printf("Error accessing path %s: %v\n", path, err)
-				return nil
-			}
-			if d.IsDir() && path != root {
-				rel, _ := filepath.Rel(root, path)
-				// Normalize to forward slashes for cross-platform depth counting
-				normalizedRel := filepath.ToSlash(rel)
-
-				// Limit to 2 levels deep to match the AI scanner's context depth
-				if strings.Count(normalizedRel, "/") < 2 {
-					diskFolders[rel] = true
+		
+		// Skip if path is a Windows-style path (e.g., Z:\Files, C:\Users)
+		// These are UNC mappings that don't exist on Linux backend
+		if strings.Contains(root, "\\") || (len(root) > 1 && root[1] == ':') {
+			fmt.Printf("Skipping Windows path %s (UNC mapping on client side only)\n", root)
+		} else if strings.HasPrefix(root, "/") {
+			// Only process Linux-style absolute paths
+			err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+				if err != nil {
+					// Log but continue to find other accessible folders
+					fmt.Printf("Error accessing path %s: %v\n", path, err)
+					return nil
 				}
+				if d.IsDir() && path != root {
+					rel, _ := filepath.Rel(root, path)
+					// Normalize to forward slashes for cross-platform depth counting
+					normalizedRel := filepath.ToSlash(rel)
+
+					// Limit to 2 levels deep to match the AI scanner's context depth
+					if strings.Count(normalizedRel, "/") < 2 {
+						diskFolders[rel] = true
+					}
+				}
+				return nil
+			})
+			if err != nil {
+				fmt.Printf("Directory walk error for root %s: %v\n", root, err)
 			}
-			return nil
-		})
-		if err != nil {
-			fmt.Printf("Directory walk error for root %s: %v\n", root, err)
+		} else {
+			fmt.Printf("Skipping relative or invalid path: %s\n", root)
 		}
 	}
 

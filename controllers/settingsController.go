@@ -52,6 +52,31 @@ func UpdateAIConfig(c *fiber.Ctx) error {
 		return c.Status(400).JSON(err.Error())
 	}
 
+	// Translate paths from any format (Windows drive letters, UNC, etc.) to Linux paths
+	translator := services.NewPathTranslator()
+	originalOriginPath := config.OriginPath
+	originalDestPath := config.DestinationPath
+	
+	if config.OriginPath != "" {
+		if translated, err := translator.TranslatePath(config.OriginPath); err == nil {
+			config.OriginPath = translated
+			log.Printf("Translated origin path: %s -> %s", originalOriginPath, config.OriginPath)
+		} else {
+			log.Printf("Warning: Could not translate origin path '%s': %v", config.OriginPath, err)
+			// Keep the original path if translation fails
+		}
+	}
+	
+	if config.DestinationPath != "" {
+		if translated, err := translator.TranslatePath(config.DestinationPath); err == nil {
+			config.DestinationPath = translated
+			log.Printf("Translated destination path: %s -> %s", originalDestPath, config.DestinationPath)
+		} else {
+			log.Printf("Warning: Could not translate destination path '%s': %v", config.DestinationPath, err)
+			// Keep the original path if translation fails
+		}
+	}
+
 	database.DB.Save(&config)
 
 	// Refresh the file watcher background service to pick up new paths

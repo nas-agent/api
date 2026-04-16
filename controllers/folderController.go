@@ -114,6 +114,41 @@ func readFoldersWithSudo(path string) ([]FolderItem, bool, error) {
 	return folders, false, nil
 }
 
+// TestFolderBrowser tests the folder listing functionality and returns diagnostic info.
+// Endpoint: POST /api/folders/test
+// Returns: { can_sudo: bool, samba_home_base: string, test_path: string, folders: [], error?: string }
+func TestFolderBrowser(c *fiber.Ctx) error {
+	// Test if sudo works
+	testCmd := exec.Command("sudo", "test", "-d", "/tmp")
+	canSudo := testCmd.Run() == nil
+
+	// Get SAMBA_HOME_BASE from environment
+	sambaHomeBase := os.Getenv("SAMBA_HOME_BASE")
+	if sambaHomeBase == "" {
+		sambaHomeBase = "/srv/samba/homes"
+	}
+
+	// Try to list the SAMBA_HOME_BASE directory
+	testPath := sambaHomeBase
+	folders, _, err := readFoldersWithSudo(testPath)
+
+	errMsg := ""
+	if err != nil {
+		errMsg = err.Error()
+		log.Printf("TestFolderBrowser: Error listing %s: %v", testPath, err)
+	}
+
+	return c.JSON(fiber.Map{
+		"can_sudo":           canSudo,
+		"samba_home_base":    sambaHomeBase,
+		"test_path":          testPath,
+		"test_path_readable": err == nil,
+		"folders_count":      len(folders),
+		"folders":            folders,
+		"error":              errMsg,
+	})
+}
+
 // readFolders is a fallback that reads directories without sudo (for testing/dev).
 // Used when sudo is not available or for paths the API process can already read.
 func readFolders(path string) ([]FolderItem, bool, error) {

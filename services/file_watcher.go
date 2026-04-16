@@ -82,20 +82,41 @@ func RefreshFileWatcher() {
 
 	for _, userAIConfig := range configs {
 		if userAIConfig.OriginPath != "" && userAIConfig.Active {
+			originPath := filepath.Clean(userAIConfig.OriginPath)
+			
+			// Skip Windows-style paths (UNC mappings on client side only)
+			if strings.Contains(originPath, "\\") || (len(originPath) > 1 && originPath[1] == ':') {
+				log.Printf("Skipping Windows path for user %s: %s (UNC mapping on client side only)", userAIConfig.UserID, originPath)
+				continue
+			}
+			
+			// Only process Linux-style absolute paths
+			if !strings.HasPrefix(originPath, "/") {
+				log.Printf("Skipping relative or invalid path for user %s: %s", userAIConfig.UserID, originPath)
+				continue
+			}
+			
 			// Ensure path exists
-			os.MkdirAll(userAIConfig.OriginPath, os.ModePerm)
+			os.MkdirAll(originPath, os.ModePerm)
 
-			err = watcher.Add(userAIConfig.OriginPath)
+			err = watcher.Add(originPath)
 			if err != nil {
-				log.Printf("Error adding watcher for user %s at %s: %v", userAIConfig.UserID, userAIConfig.OriginPath, err)
+				log.Printf("Error adding watcher for user %s at %s: %v", userAIConfig.UserID, originPath, err)
 				continue
 			}
 
-			watchMap[filepath.Clean(userAIConfig.OriginPath)] = userAIConfig.UserID
-			log.Printf("Successfully watching: %s (User ID: %s)", userAIConfig.OriginPath, userAIConfig.UserID)
+			watchMap[originPath] = userAIConfig.UserID
+			log.Printf("Successfully watching: %s (User ID: %s)", originPath, userAIConfig.UserID)
 
 			if userAIConfig.DestinationPath != "" {
-				os.MkdirAll(userAIConfig.DestinationPath, os.ModePerm)
+				destPath := filepath.Clean(userAIConfig.DestinationPath)
+				
+				// Skip Windows paths for destination too
+				if strings.Contains(destPath, "\\") || (len(destPath) > 1 && destPath[1] == ':') {
+					log.Printf("Skipping Windows destination path for user %s: %s", userAIConfig.UserID, destPath)
+				} else if strings.HasPrefix(destPath, "/") {
+					os.MkdirAll(destPath, os.ModePerm)
+				}
 			}
 		}
 	}
@@ -197,30 +218,38 @@ func processNewFile(sourcePath, fileName string, userID string, userAIConfig mod
 	// Scan Existing Folders
 	existingFolders := []string{}
 	if userAIConfig.DestinationPath != "" {
-		var scanFolders func(path string, currentDepth, maxDepth int)
-		scanFolders = func(path string, currentDepth, maxDepth int) {
-			if currentDepth > maxDepth {
-				return
-			}
-			entries, err := os.ReadDir(path)
-			if err != nil {
-				log.Printf("Warning: Failed to scan directory %s: %v", path, err)
-				return
-			}
-			for _, entry := range entries {
-				if entry.IsDir() {
-					if strings.HasPrefix(entry.Name(), ".") {
-						continue // skip hidden folders
+		destPath := filepath.Clean(userAIConfig.DestinationPath)
+		
+		// Skip Windows-style paths
+		if strings.Contains(destPath, "\\") || (len(destPath) > 1 && destPath[1] == ':') {
+			log.Printf("Warning: Destination path is Windows format (UNC mapping): %s", destPath)
+		} else if strings.HasPrefix(destPath, "/") {
+			// Only process Linux-style absolute paths
+			var scanFolders func(path string, currentDepth, maxDepth int)
+			scanFolders = func(path string, currentDepth, maxDepth int) {
+				if currentDepth > maxDepth {
+					return
+				}
+				entries, err := os.ReadDir(path)
+				if err != nil {
+					log.Printf("Warning: Failed to scan directory %s: %v", path, err)
+					return
+				}
+				for _, entry := range entries {
+					if entry.IsDir() {
+						if strings.HasPrefix(entry.Name(), ".") {
+							continue // skip hidden folders
+						}
+						fullPath := filepath.Join(path, entry.Name())
+						relPath, _ := filepath.Rel(destPath, fullPath)
+						relPath = filepath.ToSlash(relPath) // Ensure standardized paths
+						existingFolders = append(existingFolders, relPath)
+						scanFolders(fullPath, currentDepth+1, maxDepth)
 					}
-					fullPath := filepath.Join(path, entry.Name())
-					relPath, _ := filepath.Rel(userAIConfig.DestinationPath, fullPath)
-					relPath = filepath.ToSlash(relPath) // Ensure standardized paths
-					existingFolders = append(existingFolders, relPath)
-					scanFolders(fullPath, currentDepth+1, maxDepth)
 				}
 			}
+			scanFolders(destPath, 1, 2)
 		}
-		scanFolders(userAIConfig.DestinationPath, 1, 2)
 	}
 
 	// Fetch Folder Descriptions for context
@@ -331,8 +360,42 @@ func processNewFile(sourcePath, fileName string, userID string, userAIConfig mod
 	}
 
 	if userAIConfig.DestinationPath != "" && userAIConfig.AutoSelectFolder {
+		destPath := filepath.Clean(userAIConfig.DestinationPath)
+		
+		// Skip file move if destination is Windows-style path
+		if strings.Contains(destPath, "\\") || (len(destPath) > 1 && destPath[1] == ':') {
+			logEntry.Action = "skip_move"
+			logEntry.Description = fmt.Sprintf("Skipped: Destination path is Windows format (UNC mapping)")
+			logEntry.IsMove = false
+			database.DB.Create(&logEntry)
+			log.Printf("Skipping file move - destination is Windows path: %s", destPath)
+			_ = RecordDecisionEvent(DecisionEventInput{
+				UserID:            userID,
+				FileID:            metadata.ID,
+				Source:            "watcher",
+				Outcome:           "skipped",
+				ReasonCode:        "windows_path",
+				SuggestedFolder:   aiResp.SuggestedFolder,
+				FinalFolder:       "",
+				SuggestedFileName: suggestedFileName,
+				FinalFileName:     fileName,
+				ConfidenceScore:   aiResp.ConfidenceScore,
+			})
+			return
+		}
+		
+		// Only proceed with move if destination is valid Linux path
+		if !strings.HasPrefix(destPath, "/") {
+			logEntry.Action = "skip_move"
+			logEntry.Description = "Skipped: Invalid destination path (not absolute)"
+			logEntry.IsMove = false
+			database.DB.Create(&logEntry)
+			log.Printf("Skipping file move - invalid destination path: %s", destPath)
+			return
+		}
+
 		// Proceed with move
-		targetDir := filepath.Join(userAIConfig.DestinationPath, selectedFolder)
+		targetDir := filepath.Join(destPath, selectedFolder)
 		os.MkdirAll(targetDir, os.ModePerm)
 
 		destFileName := fileName
@@ -340,16 +403,16 @@ func processNewFile(sourcePath, fileName string, userID string, userAIConfig mod
 			destFileName = EnsureUniqueName(targetDir, suggestedFileName)
 		}
 
-		destPath := filepath.Join(targetDir, destFileName)
+		finalDestPath := filepath.Join(targetDir, destFileName)
 
-		err := copyFile(sourcePath, destPath)
+		err := copyFile(sourcePath, finalDestPath)
 		if err != nil {
 			log.Printf("Error moving file to NAS: %v", err)
 			return
 		}
 
 		os.Remove(sourcePath)
-		finalPath = destPath
+		finalPath = finalDestPath
 		log.Printf("Categorized and moved file to: %s (Confidence: %d)", finalPath, aiResp.ConfidenceScore)
 
 		// Fetch User Settings to check if notifications are enabled

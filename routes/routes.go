@@ -92,12 +92,20 @@ func SetupSetup(app *fiber.App) {
 		return err
 	})
 
+	// Health check
 	api.Get("/health", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{
 			"status": "ok",
 			"server": "go-fiber",
 		})
 	})
+
+	// Folder Browser Test (debug/diagnostic)
+	api.Post("/folders/test", controllers.TestFolderBrowser)
+
+	// SMB Configuration and Path Translation
+	api.Get("/smb-config", controllers.GetSMBConfig)
+	api.Post("/translate-path", controllers.TranslatePath)
 
 	// Public Users
 	api.Post("/users/register", controllers.Register)

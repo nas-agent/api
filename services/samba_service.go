@@ -156,7 +156,7 @@ func (s *SambaService) UnregisterShare(name string) error {
 			}
 			skip = false
 		}
-		
+
 		if !skip {
 			newLines = append(newLines, line)
 		}

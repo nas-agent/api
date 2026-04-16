@@ -2,10 +2,13 @@ package routes
 
 import (
 	"api/controllers"
+	"api/database"
+	"api/models"
 	"api/services"
 
 	"os"
 	"strings"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/golang-jwt/jwt/v5"
@@ -43,6 +46,51 @@ func JWTMiddleware() fiber.Handler {
 
 func SetupSetup(app *fiber.App) {
 	api := app.Group("/api")
+
+	api.Use(func(c *fiber.Ctx) error {
+		err := c.Next()
+
+		if strings.HasPrefix(c.Path(), "/api/health") {
+			return err
+		}
+
+		category := "system"
+		userID := ""
+		username := ""
+		if raw := c.Locals("user"); raw != nil {
+			if token, ok := raw.(*jwt.Token); ok {
+				if claims, ok := token.Claims.(jwt.MapClaims); ok {
+					if v, ok := claims["user_id"].(string); ok {
+						userID = v
+					}
+					if v, ok := claims["username"].(string); ok {
+						username = v
+					}
+				}
+			}
+		}
+
+		if userID != "" {
+			category = "user"
+		}
+
+		if database.DB != nil {
+			database.DB.Create(&models.ActivityLog{
+				Category:   category,
+				UserID:     userID,
+				Username:   username,
+				Action:     "API_REQUEST",
+				Source:     "api",
+				Message:    c.Method() + " " + c.Path(),
+				Method:     c.Method(),
+				Path:       c.Path(),
+				StatusCode: c.Response().StatusCode(),
+				CreatedAt:  time.Now().UnixMilli(),
+			})
+		}
+
+		return err
+	})
 
 	api.Get("/health", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{
@@ -134,5 +182,6 @@ func SetupSetup(app *fiber.App) {
 	protected.Get("/dashboard/summary", controllers.GetDashboardSummary)
 	protected.Get("/dashboard/stats", controllers.GetAdminDashboardStats)
 	protected.Get("/dashboard/recent-activity", controllers.GetAdminRecentActivity)
+	protected.Get("/admin/logs", controllers.GetAdminLogs)
 	protected.Post("/search/semantic", controllers.SemanticSearch)
 }

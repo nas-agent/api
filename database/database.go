@@ -32,6 +32,7 @@ func ConnectDB() {
 	// Auto Migrate schemas
 	err = DB.AutoMigrate(
 		&models.User{},
+		&models.ActivityLog{},
 		&models.UserUsage{},
 		&models.UserAIConfig{},
 		&models.AIActionLog{},

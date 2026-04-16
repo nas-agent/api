@@ -32,13 +32,23 @@ type QueryEntities struct {
 }
 
 type PythonSearchResponse struct {
-	SemanticIntent string        `json:"semantic_intent"`
-	FileType       *string       `json:"file_type"`
-	Tags           []string      `json:"tags"`
-	StartDate      *string       `json:"start_date"`
-	EndDate        *string       `json:"end_date"`
-	Entities       QueryEntities `json:"entities"`
-	SearchVector   []float64     `json:"search_vector"`
+	SemanticIntent string         `json:"semantic_intent"`
+	FileType       *string        `json:"file_type"`
+	Tags           []string       `json:"tags"`
+	StartDate      *string        `json:"start_date"`
+	EndDate        *string        `json:"end_date"`
+	Entities       QueryEntities  `json:"entities"`
+	SearchVector   []float64      `json:"search_vector"`
+	RAGCandidates  []RAGCandidate `json:"rag_candidates"`
+}
+
+type RAGCandidate struct {
+	FileID          uint     `json:"file_id"`
+	FileName        string   `json:"file_name"`
+	SuggestedFolder string   `json:"suggested_folder"`
+	Tags            []string `json:"tags"`
+	Summary         string   `json:"summary"`
+	Similarity      float64  `json:"similarity"`
 }
 
 type SearchResult struct {
@@ -232,7 +242,14 @@ func SemanticSearch(c *fiber.Ctx) error {
 
 	// 1. Send Query to Python NLP Agent
 	aiConfig := config.GetAIServiceConfig()
-	pythonReqBody, _ := json.Marshal(map[string]string{"query": req.Query})
+	userID := GetUserID(c)
+	if strings.TrimSpace(userID) == "" {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Unauthorized"})
+	}
+	pythonReqBody, _ := json.Marshal(map[string]string{
+		"query":   req.Query,
+		"user_id": userID,
+	})
 	pythonReq, err := http.NewRequest("POST", aiConfig.Endpoint("/api/search/parse_query"), bytes.NewBuffer(pythonReqBody))
 	if err != nil {
 		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "AI Search Engine is currently offline"})
@@ -274,7 +291,6 @@ func SemanticSearch(c *fiber.Ctx) error {
 	}
 
 	// 2. Fetch all files from DB with their Embeddings and Tags
-	userID := GetUserID(c)
 	var allFiles []models.FileMetadata
 	// Filter by Date and User directly in the DB query
 	database.DB.Where("owner_id = ?", userID).Preload("Embeddings").Preload("Tags").Find(&allFiles)
@@ -286,6 +302,18 @@ func SemanticSearch(c *fiber.Ctx) error {
 		append(append(pythonResp.Entities.SubjectNames, pythonResp.Entities.CourseNames...),
 			append(pythonResp.Entities.OrganizationNames, pythonResp.Entities.ExtraKeywords...)...)...),
 		" "))
+
+	ragCandidateScores := map[uint]float64{}
+	for _, cand := range pythonResp.RAGCandidates {
+		score := cand.Similarity
+		if score < 0 {
+			score = 0
+		}
+		if score > 1 {
+			score = 1
+		}
+		ragCandidateScores[cand.FileID] = score
+	}
 
 	// 3. Iterate, filter, and calculate cosine similarity
 	for _, file := range allFiles {
@@ -323,12 +351,25 @@ func SemanticSearch(c *fiber.Ctx) error {
 		}
 
 		personalizationScore := services.PersonalizationScore(folderName, queryTokens, pythonResp.SearchVector, profiles)
+		ragScore := 0.0
+		if v, ok := ragCandidateScores[file.ID]; ok {
+			ragScore = v
+		}
 
 		// Weighted blend of vector meaning and identity/entity matching.
 		baseScore := (semanticScore * 0.72) + (lexicalScore * 0.28)
 		finalScore := (baseScore * 0.85) + (personalizationScore * 0.15)
 		if len(pythonResp.SearchVector) == 0 {
 			finalScore = (lexicalScore * 0.80) + (personalizationScore * 0.20)
+		}
+
+		if len(ragCandidateScores) > 0 {
+			// Blend in ANN retrieval evidence from Python-side vector memory.
+			finalScore = (finalScore * 0.90) + (ragScore * 0.10)
+			// If ANN has candidates and this file is not one of them, require stronger direct evidence.
+			if ragScore == 0 && semanticScore < 0.20 && lexicalScore < 0.20 {
+				continue
+			}
 		}
 
 		if finalScore >= 0.10 || lexicalScore >= 0.24 {
@@ -351,8 +392,9 @@ func SemanticSearch(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{
-		"intent":  pythonResp.SemanticIntent,
-		"filters": pythonResp,
-		"results": searchResults[:limit],
+		"intent":              pythonResp.SemanticIntent,
+		"filters":             pythonResp,
+		"rag_candidate_count": len(pythonResp.RAGCandidates),
+		"results":             searchResults[:limit],
 	})
 }

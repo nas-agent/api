@@ -155,6 +155,9 @@ func SetupSetup(app *fiber.App) {
 	protected.Get("/settings", controllers.GetSettings)
 	protected.Put("/settings", controllers.UpdateSettings)
 
+	// Folder Browser (for directory selection in UI)
+	protected.Post("/folders", controllers.ListFolders)
+
 	// AI config
 	ai := protected.Group("/ai")
 	ai.Get("/config", controllers.GetAIConfig)

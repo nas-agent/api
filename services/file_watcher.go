@@ -83,26 +83,26 @@ func RefreshFileWatcher() {
 	for _, userAIConfig := range configs {
 		if userAIConfig.OriginPath != "" && userAIConfig.Active {
 			originPath := filepath.Clean(userAIConfig.OriginPath)
-			
+
 			// Attempt to translate the path to a Linux path
 			if translator := NewPathTranslator(); translator != nil {
 				if translated, err := translator.TranslatePath(originPath); err == nil {
 					originPath = translated
 				}
 			}
-			
+
 			// Skip Windows-style paths (UNC mappings on client side only) if translation failed
 			if strings.Contains(originPath, "\\") || (len(originPath) > 1 && originPath[1] == ':') {
 				log.Printf("Skipping Windows path for user %s: %s (UNC mapping on client side only)", userAIConfig.UserID, originPath)
 				continue
 			}
-			
+
 			// Only process Linux-style absolute paths
 			if !strings.HasPrefix(originPath, "/") {
 				log.Printf("Skipping relative or invalid path for user %s: %s", userAIConfig.UserID, originPath)
 				continue
 			}
-			
+
 			// Ensure path exists
 			os.MkdirAll(originPath, os.ModePerm)
 
@@ -117,7 +117,7 @@ func RefreshFileWatcher() {
 
 			if userAIConfig.DestinationPath != "" {
 				destPath := filepath.Clean(userAIConfig.DestinationPath)
-				
+
 				// Skip Windows paths for destination too
 				if strings.Contains(destPath, "\\") || (len(destPath) > 1 && destPath[1] == ':') {
 					log.Printf("Skipping Windows destination path for user %s: %s", userAIConfig.UserID, destPath)
@@ -226,7 +226,7 @@ func processNewFile(sourcePath, fileName string, userID string, userAIConfig mod
 	existingFolders := []string{}
 	if userAIConfig.DestinationPath != "" {
 		destPath := filepath.Clean(userAIConfig.DestinationPath)
-		
+
 		// Skip Windows-style paths
 		if strings.Contains(destPath, "\\") || (len(destPath) > 1 && destPath[1] == ':') {
 			log.Printf("Warning: Destination path is Windows format (UNC mapping): %s", destPath)
@@ -368,7 +368,7 @@ func processNewFile(sourcePath, fileName string, userID string, userAIConfig mod
 
 	if userAIConfig.DestinationPath != "" && userAIConfig.AutoSelectFolder {
 		destPath := filepath.Clean(userAIConfig.DestinationPath)
-		
+
 		// Skip file move if destination is Windows-style path
 		if strings.Contains(destPath, "\\") || (len(destPath) > 1 && destPath[1] == ':') {
 			logEntry.Action = "skip_move"
@@ -390,7 +390,7 @@ func processNewFile(sourcePath, fileName string, userID string, userAIConfig mod
 			})
 			return
 		}
-		
+
 		// Only proceed with move if destination is valid Linux path
 		if !strings.HasPrefix(destPath, "/") {
 			logEntry.Action = "skip_move"

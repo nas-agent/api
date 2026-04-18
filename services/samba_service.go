@@ -79,10 +79,17 @@ func (s *SambaService) SyncSambaUser(username, password string) error {
 	if err := exec.Command("sudo", "mkdir", "-p", homePath).Run(); err != nil {
 		return fmt.Errorf("failed to create home directory: %v", err)
 	}
-	if err := exec.Command("sudo", "chown", fmt.Sprintf("%s:%s", username, username), homePath).Run(); err != nil {
+
+	// Ensure sambashare group exists
+	_ = exec.Command("sudo", "groupadd", "-f", "sambashare").Run()
+
+	// Chown to user and sambashare group
+	if err := exec.Command("sudo", "chown", fmt.Sprintf("%s:sambashare", username), homePath).Run(); err != nil {
 		log.Printf("Warning: failed to chown %s: %v", homePath, err)
 	}
-	if err := exec.Command("sudo", "chmod", "700", homePath).Run(); err != nil {
+
+	// Set SGID (2) so new sub-files inherit the group, and 770 so the group gets rwx
+	if err := exec.Command("sudo", "chmod", "2770", homePath).Run(); err != nil {
 		log.Printf("Warning: failed to chmod %s: %v", homePath, err)
 	}
 

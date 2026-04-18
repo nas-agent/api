@@ -105,8 +105,8 @@ func CreateShare(c *fiber.Ctx) error {
 			log.Printf("Warning: Failed to chown %s: %v, output: %s\n", path, err, string(output))
 		}
 
-		// chmod 2775 path (group sticky bit, rwx for user and group, rx for others)
-		chmodCmd := exec.Command("sudo", "chmod", "-R", "2775", path)
+		// chmod 2770 path (group sticky bit, rwx for user and group, no access for others)
+		chmodCmd := exec.Command("sudo", "chmod", "-R", "2770", path)
 		if output, err := chmodCmd.CombinedOutput(); err != nil {
 			log.Printf("Warning: Failed to chmod %s: %v, output: %s\n", path, err, string(output))
 		}

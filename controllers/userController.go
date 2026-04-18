@@ -6,6 +6,7 @@ import (
 	"api/services"
 	"fmt"
 	"os"
+	"os/exec"
 	"time"
 
 	"strings"
@@ -227,14 +228,36 @@ func DeleteUser(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"message": "Missing user ID"})
 	}
 
+	// Delete User from DB
 	var user models.User
-	database.DB.Where("id = ?", id).First(&user)
+	if err := database.DB.Where("id = ?", id).First(&user).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"message": "User not found"})
+	}
 
+	// 1. Find all shares owned by this user
+	var userShares []models.Share
+	database.DB.Where("owner_id = ?", user.ID).Find(&userShares)
+
+	// 2. Remove each share from Samba config and also physically wipe the folder
+	for _, share := range userShares {
+		// Clean up smb.conf
+		services.Samba.UnregisterShare(share.Name)
+
+		// Unscoped delete from the database
+		database.DB.Unscoped().Delete(&share)
+
+		// Optionally wipe the physical data folder
+		if share.Path != "" {
+			_ = exec.Command("sudo", "rm", "-rf", share.Path).Run()
+		}
+	}
+
+	// 3. Delete user completely from the database
 	if err := database.DB.Unscoped().Where("id = ?", id).Delete(&models.User{}).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{"message": "Error deleting user"})
 	}
 
-	// Remove from Samba
+	// 4. Remove from Samba Identity / Linux System
 	if user.Username != "" {
 		services.Samba.RemoveSambaUser(user.Username)
 	}

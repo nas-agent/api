@@ -96,14 +96,14 @@ func GetPersonalizationProfile(c *fiber.Ctx) error {
 		// Attempt to resolve the correct Linux path using the user's DB info
 		if len(root) > 1 && root[1] == ':' {
 			// It's a Windows drive mapping (e.g. Z:\Files)
-			var user models.User
-			if err := database.DB.Where("id = ?", userID).First(&user).Error; err == nil && user.PersonalFolderPath != "" {
+			var share models.Share
+			if err := database.DB.Where("owner_id = ? AND type = ?", userID, "Private").First(&share).Error; err == nil && share.Path != "" {
 				// Split into Drive "Z:" and Path "\Files"
 				parts := strings.SplitN(root, ":", 2)
 				if len(parts) == 2 {
-					subPath := filepath.ToSlash(parts[1]) // convert to forward slashes (e.g., "/Files")
+					subPath := strings.ReplaceAll(parts[1], "\\", "/") // explicitly convert backslashes to forward slashes
 					subPath = strings.TrimPrefix(subPath, "/")
-					root = user.PersonalFolderPath + "/" + subPath // Build canonical Linux path
+					root = share.Path + "/" + subPath // Build canonical Linux path
 					fmt.Printf("[Path Translator DB] Mapped DestinationPath: %s -> %s\n", userAIConfig.DestinationPath, root)
 				}
 			}

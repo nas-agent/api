@@ -86,13 +86,13 @@ func RefreshFileWatcher() {
 
 			// Attempt to resolve the correct Linux path using the user's DB info
 			if len(originPath) > 1 && originPath[1] == ':' {
-				var user models.User
-				if err := database.DB.Where("id = ?", userAIConfig.UserID).First(&user).Error; err == nil && user.PersonalFolderPath != "" {
+				var share models.Share
+				if err := database.DB.Where("owner_id = ? AND type = ?", userAIConfig.UserID, "Private").First(&share).Error; err == nil && share.Path != "" {
 					parts := strings.SplitN(originPath, ":", 2)
 					if len(parts) == 2 {
-						subPath := filepath.ToSlash(parts[1])
+						subPath := strings.ReplaceAll(parts[1], "\\", "/")
 						subPath = strings.TrimPrefix(subPath, "/")
-						mappedPath := user.PersonalFolderPath + "/" + subPath
+						mappedPath := share.Path + "/" + subPath
 						log.Printf("[File Watcher DB] Mapped OriginPath: %s -> %s", originPath, mappedPath)
 						originPath = mappedPath
 					}

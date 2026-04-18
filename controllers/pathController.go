@@ -5,7 +5,6 @@ import (
 	"api/models"
 	"api/services"
 	"log"
-	"path/filepath"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
@@ -58,13 +57,13 @@ func TranslatePath(c *fiber.Ctx) error {
 
 	translatedPath := req.Path
 	if len(req.Path) > 1 && req.Path[1] == ':' && userID != "" {
-		var user models.User
-		if err := database.DB.Where("id = ?", userID).First(&user).Error; err == nil && user.PersonalFolderPath != "" {
+		var share models.Share
+		if err := database.DB.Where("owner_id = ? AND type = ?", userID, "Private").First(&share).Error; err == nil && share.Path != "" {
 			parts := strings.SplitN(req.Path, ":", 2)
 			if len(parts) == 2 {
-				subPath := filepath.ToSlash(parts[1])
+				subPath := strings.ReplaceAll(parts[1], "\\", "/")
 				subPath = strings.TrimPrefix(subPath, "/")
-				translatedPath = user.PersonalFolderPath + "/" + subPath
+				translatedPath = share.Path + "/" + subPath
 				log.Printf("[Path Translator DB] Mapped Path: %s -> %s", req.Path, translatedPath)
 			}
 		}

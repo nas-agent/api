@@ -5,7 +5,6 @@ import (
 	"api/models"
 	"api/services"
 	"log"
-	"path/filepath"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
@@ -59,16 +58,16 @@ func UpdateAIConfig(c *fiber.Ctx) error {
 	originalOriginPath := config.OriginPath
 	originalDestPath := config.DestinationPath
 
-	var user models.User
-	userFound := database.DB.Where("id = ?", userID).First(&user).Error == nil
+	var share models.Share
+	shareFound := database.DB.Where("owner_id = ? AND type = ?", userID, "Private").First(&share).Error == nil
 
 	if config.OriginPath != "" {
-		if len(config.OriginPath) > 1 && config.OriginPath[1] == ':' && userFound && user.PersonalFolderPath != "" {
+		if len(config.OriginPath) > 1 && config.OriginPath[1] == ':' && shareFound && share.Path != "" {
 			parts := strings.SplitN(config.OriginPath, ":", 2)
 			if len(parts) == 2 {
-				subPath := filepath.ToSlash(parts[1])
+				subPath := strings.ReplaceAll(parts[1], "\\", "/")
 				subPath = strings.TrimPrefix(subPath, "/")
-				config.OriginPath = user.PersonalFolderPath + "/" + subPath
+				config.OriginPath = share.Path + "/" + subPath
 				log.Printf("Mapped origin path via DB: %s -> %s", originalOriginPath, config.OriginPath)
 			}
 		} else if translated, err := translator.TranslatePath(config.OriginPath); err == nil {
@@ -81,12 +80,12 @@ func UpdateAIConfig(c *fiber.Ctx) error {
 	}
 
 	if config.DestinationPath != "" {
-		if len(config.DestinationPath) > 1 && config.DestinationPath[1] == ':' && userFound && user.PersonalFolderPath != "" {
+		if len(config.DestinationPath) > 1 && config.DestinationPath[1] == ':' && shareFound && share.Path != "" {
 			parts := strings.SplitN(config.DestinationPath, ":", 2)
 			if len(parts) == 2 {
-				subPath := filepath.ToSlash(parts[1])
+				subPath := strings.ReplaceAll(parts[1], "\\", "/")
 				subPath = strings.TrimPrefix(subPath, "/")
-				config.DestinationPath = user.PersonalFolderPath + "/" + subPath
+				config.DestinationPath = share.Path + "/" + subPath
 				log.Printf("Mapped destination path via DB: %s -> %s", originalDestPath, config.DestinationPath)
 			}
 		} else if translated, err := translator.TranslatePath(config.DestinationPath); err == nil {

@@ -84,7 +84,14 @@ func RefreshFileWatcher() {
 		if userAIConfig.OriginPath != "" && userAIConfig.Active {
 			originPath := filepath.Clean(userAIConfig.OriginPath)
 			
-			// Skip Windows-style paths (UNC mappings on client side only)
+			// Attempt to translate the path to a Linux path
+			if translator := NewPathTranslator(); translator != nil {
+				if translated, err := translator.TranslatePath(originPath); err == nil {
+					originPath = translated
+				}
+			}
+			
+			// Skip Windows-style paths (UNC mappings on client side only) if translation failed
 			if strings.Contains(originPath, "\\") || (len(originPath) > 1 && originPath[1] == ':') {
 				log.Printf("Skipping Windows path for user %s: %s (UNC mapping on client side only)", userAIConfig.UserID, originPath)
 				continue

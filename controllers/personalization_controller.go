@@ -93,8 +93,15 @@ func GetPersonalizationProfile(c *fiber.Ctx) error {
 		// Clean the path to handle potential mixed slashes
 		root = filepath.Clean(userAIConfig.DestinationPath)
 		
-		// Skip if path is a Windows-style path (e.g., Z:\Files, C:\Users)
-		// These are UNC mappings that don't exist on Linux backend
+		// Attempt to translate the path to a Linux path
+		if translator := services.NewPathTranslator(); translator != nil {
+			if translated, err := translator.TranslatePath(root); err == nil {
+				root = translated
+			}
+		}
+		
+		// If it's still a Windows-style path (e.g., Z:\Files, C:\Users)
+		// after attempted translation, these are UNC mappings that don't exist on Linux backend
 		if strings.Contains(root, "\\") || (len(root) > 1 && root[1] == ':') {
 			fmt.Printf("Skipping Windows path %s (UNC mapping on client side only)\n", root)
 		} else if strings.HasPrefix(root, "/") {

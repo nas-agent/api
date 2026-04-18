@@ -5,6 +5,8 @@ import (
 	"api/models"
 	"api/services"
 	"log"
+	"path/filepath"
+	"strings"
 
 	"github.com/gofiber/fiber/v2"
 )
@@ -56,9 +58,20 @@ func UpdateAIConfig(c *fiber.Ctx) error {
 	translator := services.NewPathTranslator()
 	originalOriginPath := config.OriginPath
 	originalDestPath := config.DestinationPath
-	
+
+	var user models.User
+	userFound := database.DB.Where("id = ?", userID).First(&user).Error == nil
+
 	if config.OriginPath != "" {
-		if translated, err := translator.TranslatePath(config.OriginPath); err == nil {
+		if len(config.OriginPath) > 1 && config.OriginPath[1] == ':' && userFound && user.PersonalFolderPath != "" {
+			parts := strings.SplitN(config.OriginPath, ":", 2)
+			if len(parts) == 2 {
+				subPath := filepath.ToSlash(parts[1])
+				subPath = strings.TrimPrefix(subPath, "/")
+				config.OriginPath = user.PersonalFolderPath + "/" + subPath
+				log.Printf("Mapped origin path via DB: %s -> %s", originalOriginPath, config.OriginPath)
+			}
+		} else if translated, err := translator.TranslatePath(config.OriginPath); err == nil {
 			config.OriginPath = translated
 			log.Printf("Translated origin path: %s -> %s", originalOriginPath, config.OriginPath)
 		} else {
@@ -66,9 +79,17 @@ func UpdateAIConfig(c *fiber.Ctx) error {
 			// Keep the original path if translation fails
 		}
 	}
-	
+
 	if config.DestinationPath != "" {
-		if translated, err := translator.TranslatePath(config.DestinationPath); err == nil {
+		if len(config.DestinationPath) > 1 && config.DestinationPath[1] == ':' && userFound && user.PersonalFolderPath != "" {
+			parts := strings.SplitN(config.DestinationPath, ":", 2)
+			if len(parts) == 2 {
+				subPath := filepath.ToSlash(parts[1])
+				subPath = strings.TrimPrefix(subPath, "/")
+				config.DestinationPath = user.PersonalFolderPath + "/" + subPath
+				log.Printf("Mapped destination path via DB: %s -> %s", originalDestPath, config.DestinationPath)
+			}
+		} else if translated, err := translator.TranslatePath(config.DestinationPath); err == nil {
 			config.DestinationPath = translated
 			log.Printf("Translated destination path: %s -> %s", originalDestPath, config.DestinationPath)
 		} else {

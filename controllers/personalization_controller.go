@@ -93,10 +93,26 @@ func GetPersonalizationProfile(c *fiber.Ctx) error {
 		// Clean the path to handle potential mixed slashes
 		root = filepath.Clean(userAIConfig.DestinationPath)
 
-		// Attempt to translate the path to a Linux path
-		if translator := services.NewPathTranslator(); translator != nil {
-			if translated, err := translator.TranslatePath(root); err == nil {
-				root = translated
+		// Attempt to resolve the correct Linux path using the user's DB info
+		if len(root) > 1 && root[1] == ':' {
+			// It's a Windows drive mapping (e.g. Z:\Files)
+			var user models.User
+			if err := database.DB.Where("id = ?", userID).First(&user).Error; err == nil && user.PersonalFolderPath != "" {
+				// Split into Drive "Z:" and Path "\Files"
+				parts := strings.SplitN(root, ":", 2)
+				if len(parts) == 2 {
+					subPath := filepath.ToSlash(parts[1]) // convert to forward slashes (e.g., "/Files")
+					subPath = strings.TrimPrefix(subPath, "/")
+					root = user.PersonalFolderPath + "/" + subPath // Build canonical Linux path
+					fmt.Printf("[Path Translator DB] Mapped DestinationPath: %s -> %s\n", userAIConfig.DestinationPath, root)
+				}
+			}
+		} else {
+			// Fallback: translate UNC or normal path
+			if translator := services.NewPathTranslator(); translator != nil {
+				if translated, err := translator.TranslatePath(root); err == nil {
+					root = translated
+				}
 			}
 		}
 

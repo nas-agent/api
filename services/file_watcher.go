@@ -84,10 +84,25 @@ func RefreshFileWatcher() {
 		if userAIConfig.OriginPath != "" && userAIConfig.Active {
 			originPath := filepath.Clean(userAIConfig.OriginPath)
 
-			// Attempt to translate the path to a Linux path
-			if translator := NewPathTranslator(); translator != nil {
-				if translated, err := translator.TranslatePath(originPath); err == nil {
-					originPath = translated
+			// Attempt to resolve the correct Linux path using the user's DB info
+			if len(originPath) > 1 && originPath[1] == ':' {
+				var user models.User
+				if err := database.DB.Where("id = ?", userAIConfig.UserID).First(&user).Error; err == nil && user.PersonalFolderPath != "" {
+					parts := strings.SplitN(originPath, ":", 2)
+					if len(parts) == 2 {
+						subPath := filepath.ToSlash(parts[1])
+						subPath = strings.TrimPrefix(subPath, "/")
+						mappedPath := user.PersonalFolderPath + "/" + subPath
+						log.Printf("[File Watcher DB] Mapped OriginPath: %s -> %s", originPath, mappedPath)
+						originPath = mappedPath
+					}
+				}
+			} else {
+				// Fallback to legacy translation
+				if translator := NewPathTranslator(); translator != nil {
+					if translated, err := translator.TranslatePath(originPath); err == nil {
+						originPath = translated
+					}
 				}
 			}
 

@@ -111,7 +111,7 @@ func (s *SambaService) RegisterShare(name, path, owner string, isPublic bool) er
 		comment = "NAS Agent Public Share"
 	}
 
-	entry := fmt.Sprintf("\n[%s]\n   comment = %s\n   path = %s\n   browseable = yes\n   read only = no\n   guest ok = %s\n",
+	entry := fmt.Sprintf("\n[%s]\n   comment = %s\n   path = %s\n   browseable = yes\n   read only = no\n   guest ok = %s\n   force group = sambashare\n   create mask = 0660\n   force create mode = 0660\n   directory mask = 2770\n   force directory mode = 2770\n",
 		name, comment, path, map[bool]string{true: "yes", false: "no"}[isPublic])
 
 	if !isPublic && owner != "" {

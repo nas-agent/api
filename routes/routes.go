@@ -189,10 +189,12 @@ func SetupSetup(app *fiber.App) {
 	ai.Get("/monitors", controllers.GetMonitors)
 	ai.Post("/monitors/toggle", controllers.ToggleMonitor)
 
+	// Admin & Dashboard (Public for web-admin on LAN)
+	api.Get("/dashboard/summary", controllers.GetDashboardSummary)
+	api.Get("/dashboard/stats", controllers.GetAdminDashboardStats)
+	api.Get("/dashboard/recent-activity", controllers.GetAdminRecentActivity)
+	api.Get("/admin/logs", controllers.GetAdminLogs)
+
 	// Search
-	protected.Get("/dashboard/summary", controllers.GetDashboardSummary)
-	protected.Get("/dashboard/stats", controllers.GetAdminDashboardStats)
-	protected.Get("/dashboard/recent-activity", controllers.GetAdminRecentActivity)
-	protected.Get("/admin/logs", controllers.GetAdminLogs)
 	protected.Post("/search/semantic", controllers.SemanticSearch)
 }

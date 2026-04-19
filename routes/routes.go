@@ -6,6 +6,7 @@ import (
 	"api/models"
 	"api/services"
 
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -50,8 +51,57 @@ func SetupSetup(app *fiber.App) {
 	api.Use(func(c *fiber.Ctx) error {
 		err := c.Next()
 
-		if strings.HasPrefix(c.Path(), "/api/health") {
+		// Skip high-frequency polling/health checks
+		path := c.Path()
+		if strings.HasPrefix(path, "/api/health") || strings.HasPrefix(path, "/api/ai/notifications") {
 			return err
+		}
+
+		// Noise reduction: Only log actions (POST, PUT, DELETE, PATCH, etc.)
+		if c.Method() == "GET" {
+			return err
+		}
+
+		// Determine descriptive action name
+		actionName := "API_REQUEST"
+		if manualAction := c.Locals("action_name"); manualAction != nil {
+			actionName = manualAction.(string)
+		} else {
+			// Fallback to route-based mapping
+			method := c.Method()
+			routePath := c.Route().Path // e.g. /api/nas/shares/:id
+
+			// Create a key like "POST /api/nas/shares" or "DELETE /api/nas/shares/:id"
+			key := fmt.Sprintf("%s %s", method, routePath)
+
+			// Simple mapping for common actions
+			mapping := map[string]string{
+				"POST /api/users/login":               "USER_LOGIN",
+				"POST /api/users/register":            "USER_REGISTER",
+				"POST /api/users/change-password":      "USER_PASSWORD_CHANGE",
+				"POST /api/nas/storage/mount":         "STORAGE_MOUNT",
+				"POST /api/nas/storage/unmount":       "STORAGE_UNMOUNT",
+				"POST /api/nas/storage/format-and-mount": "STORAGE_FORMAT_MOUNT",
+				"POST /api/nas/storage/raid1":         "RAID_CREATE",
+				"DELETE /api/nas/raid/arrays/:raidName": "RAID_DELETE",
+				"POST /api/nas/shares":                "SHARE_CREATE",
+				"DELETE /api/nas/shares/:id":          "SHARE_DELETE",
+				"POST /api/nas/groups":                "GROUP_CREATE",
+				"POST /api/nas/groups/members":        "GROUP_MEMBER_ADD",
+				"POST /api/nas/quotas":                "QUOTA_SET",
+				"POST /api/admin/reconcile":           "SYSTEM_RECONCILE",
+				"PUT /api/settings":                   "SETTINGS_UPDATE",
+				"PUT /api/ai/config":                 "AI_CONFIG_UPDATE",
+				"POST /api/ai/history":               "AI_HISTORY_ADD",
+				"DELETE /api/ai/history":             "AI_HISTORY_CLEAR",
+				"POST /api/ai/feedback":              "AI_FEEDBACK_SUBMIT",
+				"POST /api/ai/monitors/toggle":       "AI_MONITOR_TOGGLE",
+				"DELETE /api/users/:id":               "USER_DELETE",
+			}
+
+			if mapped, ok := mapping[key]; ok {
+				actionName = mapped
+			}
 		}
 
 		category := "system"
@@ -79,11 +129,11 @@ func SetupSetup(app *fiber.App) {
 				Category:   category,
 				UserID:     userID,
 				Username:   username,
-				Action:     "API_REQUEST",
+				Action:     actionName,
 				Source:     "api",
-				Message:    c.Method() + " " + c.Path(),
+				Message:    c.Method() + " " + path,
 				Method:     c.Method(),
-				Path:       c.Path(),
+				Path:       path,
 				StatusCode: c.Response().StatusCode(),
 				CreatedAt:  time.Now().UnixMilli(),
 			})

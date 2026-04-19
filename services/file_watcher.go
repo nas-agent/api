@@ -219,20 +219,25 @@ func eventTypeString(op fsnotify.Op) string {
 
 func waitForFileStability(path string) error {
 	var lastSize int64 = -1
-	// More patient stability check: 15 samples over 3 seconds
-	for i := 0; i < 15; i++ {
+	// Increased patience: 25 samples over 5 seconds total
+	for i := 0; i < 25; i++ {
 		fi, err := os.Stat(path)
 		if err != nil {
 			return err
 		}
 		currentSize := fi.Size()
-		// Only consider stable if size is constant, non-zero, and hasn't changed for at least 2 samples
+		// Only consider stable if size is constant and non-zero
 		if currentSize == lastSize && currentSize > 0 {
-			// Try to open it to ensure it's not locked by another process
-			f, err := os.Open(path)
-			if err == nil {
-				f.Close()
-				return nil
+			// Final cool-off: Wait another 800ms to ensure buffers are fully flushed
+			time.Sleep(800 * time.Millisecond)
+			fi2, _ := os.Stat(path)
+			if fi2 != nil && fi2.Size() == currentSize {
+				// Try to open it to ensure it's not locked
+				f, err := os.Open(path)
+				if err == nil {
+					f.Close()
+					return nil
+				}
 			}
 		}
 		lastSize = currentSize

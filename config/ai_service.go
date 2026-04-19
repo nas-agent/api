@@ -10,12 +10,19 @@ type AIServiceConfig struct {
 	APIKey  string
 }
 
+// AIServiceURLFlag is populated from command-line flags in main.go
+var AIServiceURLFlag string
+
 // GetAIServiceConfig returns the AI service configuration
-// It reads from environment variables or uses defaults
+// It reads from environment variables, command-line flags, or uses defaults
 func GetAIServiceConfig() AIServiceConfig {
 	baseURL := os.Getenv("AI_SERVICE_BASE_URL")
 	if baseURL == "" {
-		baseURL = "https://fx8gncn0-8000.asse.devtunnels.ms"
+		if AIServiceURLFlag != "" {
+			baseURL = AIServiceURLFlag
+		} else {
+			baseURL = "https://fx8gncn0-8000.asse.devtunnels.ms"
+		}
 	}
 
 	apiKey := os.Getenv("AI_SERVICE_API_KEY")

@@ -1,9 +1,11 @@
 package main
 
 import (
+	"api/config"
 	"api/database"
 	"api/routes"
 	"api/services"
+	"flag"
 	"log"
 	"net"
 	"os"
@@ -352,6 +354,10 @@ func handleWebSocketNotifications(c *websocket.Conn) {
 }
 
 func main() {
+	// Define command-line flags
+	flag.StringVar(&config.AIServiceURLFlag, "ai-url", "", "AI Service Base URL")
+	flag.Parse()
+
 	// Check and setup sudoers configuration
 	checkSudoersConfig()
 

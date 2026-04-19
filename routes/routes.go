@@ -90,6 +90,7 @@ func SetupSetup(app *fiber.App) {
 				"POST /api/nas/groups/members":        "GROUP_MEMBER_ADD",
 				"POST /api/nas/quotas":                "QUOTA_SET",
 				"POST /api/admin/reconcile":           "SYSTEM_RECONCILE",
+				"GET /api/admin/reconcile":            "SYSTEM_RECONCILE",
 				"PUT /api/settings":                   "SETTINGS_UPDATE",
 				"PUT /api/ai/config":                 "AI_CONFIG_UPDATE",
 				"POST /api/ai/history":               "AI_HISTORY_ADD",

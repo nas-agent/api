@@ -154,6 +154,12 @@ func SetupSetup(app *fiber.App) {
 	api.Get("/users", controllers.GetUsers)
 	api.Delete("/users/:id", controllers.DeleteUser)
 
+	// Admin & Dashboard (Public for web-admin on LAN)
+	api.Get("/dashboard/summary", controllers.GetDashboardSummary)
+	api.Get("/dashboard/stats", controllers.GetAdminDashboardStats)
+	api.Get("/dashboard/recent-activity", controllers.GetAdminRecentActivity)
+	api.Get("/admin/logs", controllers.GetAdminLogs)
+
 	// Protected Routes
 	protected := api.Group("/", JWTMiddleware())
 	protected.Post("/users/change-password", controllers.ChangePassword)
@@ -166,14 +172,8 @@ func SetupSetup(app *fiber.App) {
 	// Folder Browser (for directory selection in UI)
 	protected.Post("/folders", controllers.ListFolders)
 
-	// Admin & Dashboard (Public for web-admin on LAN)
-	api.Get("/dashboard/summary", controllers.GetDashboardSummary)
-	api.Get("/dashboard/stats", controllers.GetAdminDashboardStats)
-	api.Get("/dashboard/recent-activity", controllers.GetAdminRecentActivity)
-	api.Get("/admin/logs", controllers.GetAdminLogs)
-
 	// AI config
-	ai := api.Group("/ai")
+	ai := api.Group("/ai") // Uses PUBLIC group
 	ai.Get("/config", controllers.GetAIConfig)
 	ai.Put("/config", controllers.UpdateAIConfig)
 	ai.Get("/notifications", services.PollNotifications)
@@ -194,12 +194,6 @@ func SetupSetup(app *fiber.App) {
 	// Monitors
 	ai.Get("/monitors", controllers.GetMonitors)
 	ai.Post("/monitors/toggle", controllers.ToggleMonitor)
-
-	// Admin & Dashboard (Public for web-admin on LAN)
-	api.Get("/dashboard/summary", controllers.GetDashboardSummary)
-	api.Get("/dashboard/stats", controllers.GetAdminDashboardStats)
-	api.Get("/dashboard/recent-activity", controllers.GetAdminRecentActivity)
-	api.Get("/admin/logs", controllers.GetAdminLogs)
 
 	// Search
 	protected.Post("/search/semantic", controllers.SemanticSearch)

@@ -163,6 +163,7 @@ func SetupSetup(app *fiber.App) {
 
 	// Admin Reconciliation (Public for external triggers)
 	api.Post("/admin/reconcile", controllers.ReconcileSystem)
+	api.Get("/admin/reconcile", controllers.ReconcileSystem)
 
 	// NAS
 	api.Get("/nas/storage/devices", controllers.GetStorageDevices)

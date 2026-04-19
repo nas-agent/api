@@ -15,7 +15,7 @@ type AIServiceConfig struct {
 func GetAIServiceConfig() AIServiceConfig {
 	baseURL := os.Getenv("AI_SERVICE_BASE_URL")
 	if baseURL == "" {
-		baseURL = "http://192.168.56.1:8000"
+		baseURL = "https://fx8gncn0-8000.asse.devtunnels.ms"
 	}
 
 	apiKey := os.Getenv("AI_SERVICE_API_KEY")

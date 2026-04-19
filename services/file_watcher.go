@@ -217,7 +217,36 @@ func eventTypeString(op fsnotify.Op) string {
 	}
 }
 
+func waitForFileStability(path string) error {
+	var lastSize int64 = -1
+	// More patient stability check: 15 samples over 3 seconds
+	for i := 0; i < 15; i++ {
+		fi, err := os.Stat(path)
+		if err != nil {
+			return err
+		}
+		currentSize := fi.Size()
+		// Only consider stable if size is constant, non-zero, and hasn't changed for at least 2 samples
+		if currentSize == lastSize && currentSize > 0 {
+			// Try to open it to ensure it's not locked by another process
+			f, err := os.Open(path)
+			if err == nil {
+				f.Close()
+				return nil
+			}
+		}
+		lastSize = currentSize
+		time.Sleep(200 * time.Millisecond)
+	}
+	return fmt.Errorf("file size is still changing or empty after timeout")
+}
+
 func processNewFile(sourcePath, fileName string, userID string, userAIConfig models.UserAIConfig) {
+	// Ensure file is stable before reading
+	if err := waitForFileStability(sourcePath); err != nil {
+		log.Printf("Warning: File %s might be incomplete: %v", fileName, err)
+	}
+
 	// Create Initial Metadata (Pending AI Analysis)
 	fileInfo, _ := os.Stat(sourcePath)
 	size := int64(0)
@@ -226,7 +255,7 @@ func processNewFile(sourcePath, fileName string, userID string, userAIConfig mod
 	}
 
 	metadata := models.FileMetadata{
-		NASPath:       sourcePath, // Temporarily point to the origin path
+		NASPath:       sourcePath,
 		FileName:      fileName,
 		FileType:      filepath.Ext(fileName),
 		FileSizeBytes: size,
@@ -234,8 +263,26 @@ func processNewFile(sourcePath, fileName string, userID string, userAIConfig mod
 		LastAccessed:  time.Now().Unix(),
 	}
 
-	database.DB.Create(&metadata)
-	log.Printf("Saved initial metadata for: %s (ID: %d)", fileName, metadata.ID)
+	// Use Upsert (FirstOrCreate with Assign) to handle UNIQUE constraint on NASPath
+	// This prevents the "UNIQUE constraint failed" error if a file is re-added
+	if err := database.DB.Where(models.FileMetadata{NASPath: sourcePath}).
+		Assign(models.FileMetadata{
+			FileName:      fileName,
+			FileType:      filepath.Ext(fileName),
+			FileSizeBytes: size,
+			LastAccessed:  time.Now().Unix(),
+		}).
+		FirstOrCreate(&metadata).Error; err != nil {
+		log.Printf("[File Watcher] ERROR saving metadata for %s: %v. Aborting AI analysis.", fileName, err)
+		return
+	}
+
+	if metadata.ID == 0 {
+		log.Printf("[File Watcher] ERROR: Metadata ID is 0 for %s. Aborting AI analysis.", fileName)
+		return
+	}
+
+	log.Printf("[File Watcher] Metadata ready for: %s (ID: %d)", fileName, metadata.ID)
 
 	// Scan Existing Folders
 	existingFolders := []string{}

@@ -159,6 +159,7 @@ func SetupSetup(app *fiber.App) {
 	api.Get("/dashboard/stats", controllers.GetAdminDashboardStats)
 	api.Get("/dashboard/recent-activity", controllers.GetAdminRecentActivity)
 	api.Get("/admin/logs", controllers.GetAdminLogs)
+	api.Post("/admin/reconcile", controllers.ReconcileSystem)
 
 	// Protected Routes
 	protected := api.Group("/", JWTMiddleware())

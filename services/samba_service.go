@@ -45,7 +45,8 @@ func runSmbpasswd(username, password string, addUser bool) error {
 
 func (s *SambaService) ensureLinuxUser(username string) {
 	// -M: no home dir (we manage it), -s /usr/sbin/nologin: no shell login
-	_ = exec.Command("sudo", "useradd", "-M", "-s", "/usr/sbin/nologin", username).Run()
+	// -c: add comment to identify managed users
+	_ = exec.Command("sudo", "useradd", "-M", "-s", "/usr/sbin/nologin", "-c", "NAS Agent Managed User", username).Run()
 	_ = exec.Command("sudo", "groupadd", "-f", "sambashare").Run()
 	_ = exec.Command("sudo", "usermod", "-a", "-G", "sambashare", username).Run()
 }
@@ -183,4 +184,130 @@ func (s *SambaService) UnregisterShare(name string) error {
 // RestartService reloads the Samba daemon
 func (s *SambaService) RestartService() error {
 	return exec.Command("sudo", "systemctl", "restart", "smbd").Run()
+}
+
+// PruneResources removes orphaned shares and users that are marked as "NAS Agent Managed"
+// but are missing from the provided database lists.
+func (s *SambaService) PruneResources(dbShares []string, dbUsers []string) (int, int, error) {
+	prunedShares := 0
+	prunedUsers := 0
+
+	// 1. Prune Shares from smb.conf
+	content, err := exec.Command("sudo", "cat", s.ConfigPath).Output()
+	if err == nil {
+		lines := strings.Split(string(content), "\n")
+		var newLines []string
+		var currentSection string
+		var sectionLines []string
+		isManagedSection := false
+
+		for i := 0; i < len(lines); i++ {
+			line := lines[i]
+			trimmed := strings.TrimSpace(line)
+
+			if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+				// We reached a new section. Process the previous one.
+				if currentSection != "" {
+					keep := true
+					if isManagedSection {
+						// Check if this managed share is in DB
+						dbExists := false
+						for _, dbName := range dbShares {
+							if dbName == currentSection {
+								dbExists = true
+								break
+							}
+						}
+						if !dbExists {
+							keep = false
+							prunedShares++
+							log.Printf("[Prune] Removing orphaned Samba share: [%s]\n", currentSection)
+						}
+					}
+					if keep {
+						newLines = append(newLines, sectionLines...)
+					}
+				}
+
+				// Reset for new section
+				currentSection = trimmed[1 : len(trimmed)-1]
+				sectionLines = []string{line}
+				isManagedSection = false
+			} else {
+				if currentSection != "" {
+					sectionLines = append(sectionLines, line)
+					if strings.Contains(line, "NAS Agent Managed Share") || strings.Contains(line, "NAS Agent Public Share") {
+						isManagedSection = true
+					}
+				} else {
+					// Preamble/Global before any section
+					newLines = append(newLines, line)
+				}
+			}
+		}
+
+		// Handle last section
+		if currentSection != "" {
+			keep := true
+			if isManagedSection {
+				dbExists := false
+				for _, dbName := range dbShares {
+					if dbName == currentSection {
+						dbExists = true
+						break
+					}
+				}
+				if !dbExists {
+					keep = false
+					prunedShares++
+					log.Printf("[Prune] Removing orphaned Samba share: [%s]\n", currentSection)
+				}
+			}
+			if keep {
+				newLines = append(newLines, sectionLines...)
+			}
+		}
+
+		// Write back if any shares were pruned
+		if prunedShares > 0 {
+			newContent := strings.Join(newLines, "\n")
+			_ = exec.Command("sudo", "tee", s.ConfigPath).Run() // Truncate
+			writeCmd := exec.Command("sudo", "tee", s.ConfigPath)
+			writeCmd.Stdin = strings.NewReader(newContent)
+			_ = writeCmd.Run()
+			s.RestartService()
+		}
+	}
+
+	// 2. Prune Users
+	// Find all system users with the NAS Agent comment
+	passwdContent, err := exec.Command("grep", "NAS Agent Managed User", "/etc/passwd").Output()
+	if err == nil {
+		passwdLines := strings.Split(string(passwdContent), "\n")
+		for _, line := range passwdLines {
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+			// line format: username:x:uid:gid:comment:home:shell
+			parts := strings.Split(line, ":")
+			if len(parts) > 0 {
+				username := parts[0]
+				dbExists := false
+				for _, dbUser := range dbUsers {
+					if dbUser == username {
+						dbExists = true
+						break
+					}
+				}
+
+				if !dbExists {
+					log.Printf("[Prune] Removing orphaned managed user: %s\n", username)
+					_ = s.RemoveSambaUser(username)
+					prunedUsers++
+				}
+			}
+		}
+	}
+
+	return prunedShares, prunedUsers, nil
 }

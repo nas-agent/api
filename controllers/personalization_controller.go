@@ -80,6 +80,22 @@ func SubmitPersonalizationFeedback(c *fiber.Ctx) error {
 	// NEW: Notify AI Agent of feedback for semantic learning
 	go NotifyAgentOfFeedback(userID, req.FileID, req.Outcome, req.FinalFolder)
 
+	// NEW: Update original AIActionLog status if log_id provided in metadata
+	if logIDRaw, ok := req.Metadata["log_id"]; ok {
+		var logID uint
+		switch v := logIDRaw.(type) {
+		case float64:
+			logID = uint(v)
+		case int:
+			logID = uint(v)
+		case string:
+			fmt.Sscanf(v, "%d", &logID)
+		}
+		if logID > 0 {
+			database.DB.Model(&models.AIActionLog{}).Where("log_id = ? AND user_id = ?", logID, userID).Update("status", req.Outcome)
+		}
+	}
+
 	return c.JSON(fiber.Map{"message": "feedback saved"})
 }
 
@@ -361,7 +377,8 @@ func ManualRelocateFeedback(c *fiber.Ctx) error {
 		FileID            uint   `json:"file_id"`
 		SuggestedFolder   string `json:"suggested_folder"`
 		Strategy          string `json:"strategy"` // origin | custom
-		DestinationFolder string `json:"destination_folder"`
+		DestinationFolder string         `json:"destination_folder"`
+		Metadata          map[string]any `json:"metadata"`
 	}
 
 	if err := c.BodyParser(&req); err != nil {
@@ -452,6 +469,24 @@ func ManualRelocateFeedback(c *fiber.Ctx) error {
 		IsMove:      true,
 	})
 
+	// NEW: Update original AIActionLog status if log_id provided in metadata
+	if req.Metadata != nil {
+		if logIDRaw, ok := req.Metadata["log_id"]; ok {
+			var logID uint
+			switch v := logIDRaw.(type) {
+			case float64:
+				logID = uint(v)
+			case int:
+				logID = uint(v)
+			case string:
+				fmt.Sscanf(v, "%d", &logID)
+			}
+			if logID > 0 {
+				database.DB.Model(&models.AIActionLog{}).Where("log_id = ? AND user_id = ?", logID, userID).Update("status", "rejected")
+			}
+		}
+	}
+
 	return c.JSON(fiber.Map{
 		"message":      "moved",
 		"final_path":   newPath,
@@ -463,9 +498,10 @@ func ManualRelocateFeedback(c *fiber.Ctx) error {
 func CaptureManualMoveFeedback(c *fiber.Ctx) error {
 	userID := GetUserID(c)
 	var req struct {
-		FileID          uint   `json:"file_id"`
-		SuggestedFolder string `json:"suggested_folder"`
-		FinalFileName   string `json:"final_file_name"`
+		FileID          uint           `json:"file_id"`
+		SuggestedFolder string         `json:"suggested_folder"`
+		FinalFileName   string         `json:"final_file_name"`
+		Metadata        map[string]any `json:"metadata"`
 	}
 
 	if err := c.BodyParser(&req); err != nil {
@@ -535,22 +571,26 @@ func CaptureManualMoveFeedback(c *fiber.Ctx) error {
 	database.DB.Save(&file)
 
 	finalFolder := filepath.Base(filepath.Dir(newPath))
-	if err := services.RecordDecisionEvent(services.DecisionEventInput{
-		UserID:            userID,
-		FileID:            file.ID,
-		Source:            "manual_capture",
-		Outcome:           "accepted",
-		ReasonCode:        "changed_folder",
-		SuggestedFolder:   req.SuggestedFolder,
-		FinalFolder:       finalFolder,
-		SuggestedFileName: file.FileName,
-		FinalFileName:     file.FileName,
-		ConfidenceScore:   0,
-		Metadata: map[string]any{
-			"captured_path": newPath,
-		},
-	}); err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to save captured move"})
+	
+	// Notify AI Agent of the capture
+	go NotifyAgentOfFeedback(userID, file.ID, "accepted", finalFolder)
+
+	// NEW: Update original AIActionLog status if log_id provided in metadata
+	if req.Metadata != nil {
+		if logIDRaw, ok := req.Metadata["log_id"]; ok {
+			var logID uint
+			switch v := logIDRaw.(type) {
+			case float64:
+				logID = uint(v)
+			case int:
+				logID = uint(v)
+			case string:
+				fmt.Sscanf(v, "%d", &logID)
+			}
+			if logID > 0 {
+				database.DB.Model(&models.AIActionLog{}).Where("log_id = ? AND user_id = ?", logID, userID).Update("status", "accepted")
+			}
+		}
 	}
 
 	return c.JSON(fiber.Map{

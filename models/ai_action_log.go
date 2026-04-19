@@ -9,5 +9,6 @@ type AIActionLog struct {
 	Folder      string `json:"folder"`
 	Filename    string `json:"filename"`
 	IsMove      bool   `json:"is_move"`
+	Status      string `gorm:"type:string;default:pending" json:"status"`
 	CreatedAt   int64  `gorm:"autoCreateTime" json:"timestamp"`
 }

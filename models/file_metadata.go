@@ -12,6 +12,7 @@ type FileMetadata struct {
 	OwnerID       string `gorm:"index" json:"owner_id"`
 	Summary       string `gorm:"type:text" json:"summary"`
 	Entities      string `gorm:"type:text" json:"entities"`
+	Status        string `json:"status"`
 
 	// Relationships
 	Tags       []FileTag       `gorm:"foreignKey:FileID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE;" json:"tags"`

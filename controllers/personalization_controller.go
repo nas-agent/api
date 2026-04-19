@@ -77,6 +77,9 @@ func SubmitPersonalizationFeedback(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to persist feedback"})
 	}
 
+	// NEW: Notify AI Agent of feedback for semantic learning
+	go NotifyAgentOfFeedback(userID, req.FileID, req.Outcome, req.FinalFolder)
+
 	return c.JSON(fiber.Map{"message": "feedback saved"})
 }
 
@@ -261,9 +264,16 @@ func GetPersonalizationProfile(c *fiber.Ctx) error {
 	last7Rate := ratio(last7Accepted, last7Total)
 	prev7Rate := ratio(prev7Accepted, prev7Total)
 
+	// 5. Get AI Service Config for Agent Discovery
+	aiSvcConfig := config.GetAIServiceConfig()
+
 	return c.JSON(fiber.Map{
 		"folder_profiles": folderViews,
 		"naming_profile":  namingPayload,
+		"ai_config": fiber.Map{
+			"agent_url":     aiSvcConfig.BaseURL,
+			"agent_api_key": aiSvcConfig.APIKey,
+		},
 		"guardrails": fiber.Map{
 			"last_7d_accept_rate":     last7Rate,
 			"previous_7d_accept_rate": prev7Rate,
@@ -428,6 +438,9 @@ func ManualRelocateFeedback(c *fiber.Ctx) error {
 	}); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to record learning event"})
 	}
+
+	// NEW: Notify AI Agent of manual correction
+	go NotifyAgentOfFeedback(userID, file.ID, "rejected", finalFolder)
 
 	database.DB.Create(&models.AIActionLog{
 		UserID:      userID,
@@ -706,4 +719,43 @@ func GenerateFolderDescription(c *fiber.Ctx) error {
 	json.NewDecoder(resp.Body).Decode(&result)
 
 	return c.JSON(fiber.Map{"description": result.Description})
+}
+
+// NotifyAgentOfFeedback informs the Python Agent of a user decision for semantic learning
+func NotifyAgentOfFeedback(userID string, fileID uint, outcome string, finalFolder string) {
+	if fileID == 0 || finalFolder == "" {
+		return
+	}
+
+	aiConfig := config.GetAIServiceConfig()
+	payload := map[string]any{
+		"user_id":      userID,
+		"file_id":      fileID,
+		"outcome":      outcome,
+		"final_folder": finalFolder,
+	}
+
+	jsonData, _ := json.Marshal(payload)
+	req, err := http.NewRequest("POST", aiConfig.Endpoint("/api/analyze/feedback"), bytes.NewBuffer(jsonData))
+	if err != nil {
+		log.Printf("[Feedback Bridge] Error creating request: %v", err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", aiConfig.APIKey)
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[Feedback Bridge] Agent unavailable: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		log.Printf("[Feedback Bridge] Agent error (%d): %s", resp.StatusCode, body)
+	} else {
+		log.Printf("[Feedback Bridge] Successfully reported feedback for file %d to Agent", fileID)
+	}
 }

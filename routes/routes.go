@@ -251,6 +251,7 @@ func SetupSetup(app *fiber.App) {
 	// Monitors
 	protectedAI.Get("/monitors", controllers.GetMonitors)
 	protectedAI.Post("/monitors/toggle", controllers.ToggleMonitor)
+	protectedAI.Post("/scan", controllers.TriggerManualScan)
 
 	// Search
 	protected.Post("/search/semantic", controllers.SemanticSearch)

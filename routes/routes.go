@@ -166,8 +166,14 @@ func SetupSetup(app *fiber.App) {
 	// Folder Browser (for directory selection in UI)
 	protected.Post("/folders", controllers.ListFolders)
 
+	// Admin & Dashboard (Public for web-admin on LAN)
+	api.Get("/dashboard/summary", controllers.GetDashboardSummary)
+	api.Get("/dashboard/stats", controllers.GetAdminDashboardStats)
+	api.Get("/dashboard/recent-activity", controllers.GetAdminRecentActivity)
+	api.Get("/admin/logs", controllers.GetAdminLogs)
+
 	// AI config
-	ai := protected.Group("/ai")
+	ai := api.Group("/ai")
 	ai.Get("/config", controllers.GetAIConfig)
 	ai.Put("/config", controllers.UpdateAIConfig)
 	ai.Get("/notifications", services.PollNotifications)

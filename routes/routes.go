@@ -161,6 +161,9 @@ func SetupSetup(app *fiber.App) {
 	api.Post("/users/register", controllers.Register)
 	api.Post("/users/login", controllers.Login)
 
+	// Admin Reconciliation (Public for external triggers)
+	api.Post("/admin/reconcile", controllers.ReconcileSystem)
+
 	// NAS
 	api.Get("/nas/storage/devices", controllers.GetStorageDevices)
 	api.Post("/nas/storage/mount", controllers.MountDevice)
@@ -209,7 +212,6 @@ func SetupSetup(app *fiber.App) {
 	api.Get("/dashboard/stats", controllers.GetAdminDashboardStats)
 	api.Get("/dashboard/recent-activity", controllers.GetAdminRecentActivity)
 	api.Get("/admin/logs", controllers.GetAdminLogs)
-	api.Post("/admin/reconcile", controllers.ReconcileSystem)
 
 	// Protected Routes
 	protected := api.Group("/", JWTMiddleware())

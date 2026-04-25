@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"api/models"
+	"golang.org/x/crypto/bcrypt"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -173,4 +174,47 @@ func InitializeRaidArraysFromSystem() {
 	}
 
 	log.Println("RAID array initialization complete")
+}
+
+// EnsureAdminUser creates or updates a user with admin privileges
+// Useful for debugging and first-time setup via CLI flags
+func EnsureAdminUser(username, password string) {
+	var user models.User
+	
+	// Try to find the user
+	err := DB.Where("username = ?", username).First(&user).Error
+	
+	hashedPassword, _ := bcrypt.GenerateFromPassword([]byte(password), 14)
+	now := time.Now().Unix()
+
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			log.Printf("[Setup] Admin user '%s' not found, creating...\n", username)
+			user = models.User{
+				Username: username,
+				Email:    username + "@local.nas",
+				Password: string(hashedPassword),
+				Role:     "admin",
+				CreatedAt: now,
+				UpdatedAt: now,
+			}
+			if createErr := DB.Create(&user).Error; createErr != nil {
+				log.Printf("[Setup] Failed to create admin user: %v\n", createErr)
+			} else {
+				log.Printf("[Setup] ✓ Admin user '%s' created successfully\n", username)
+			}
+		} else {
+			log.Printf("[Setup] Error looking up admin user: %v\n", err)
+		}
+	} else {
+		log.Printf("[Setup] Admin user '%s' exists, updating password and ensuring admin role...\n", username)
+		user.Password = string(hashedPassword)
+		user.Role = "admin"
+		user.UpdatedAt = now
+		if saveErr := DB.Save(&user).Error; saveErr != nil {
+			log.Printf("[Setup] Failed to update admin user: %v\n", saveErr)
+		} else {
+			log.Printf("[Setup] ✓ Admin user '%s' updated successfully\n", username)
+		}
+	}
 }

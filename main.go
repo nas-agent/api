@@ -5,9 +5,11 @@ import (
 	"api/database"
 	"api/routes"
 	"api/services"
+	"embed"
 	"flag"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,9 +18,13 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
+	"github.com/gofiber/fiber/v2/middleware/filesystem"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	websocket "github.com/gofiber/websocket/v2"
 )
+
+//go:embed public/*
+var embeddedFiles embed.FS
 
 // checkSudoersConfig verifies that required commands are in sudoers
 // and attempts to auto-setup if not configured
@@ -355,7 +361,11 @@ func handleWebSocketNotifications(c *websocket.Conn) {
 
 func main() {
 	// Define command-line flags
+	var adminUser string
+	var adminPass string
 	flag.StringVar(&config.AIServiceURLFlag, "ai-url", "", "AI Service Base URL")
+	flag.StringVar(&adminUser, "admin-user", "", "Admin username to create/update")
+	flag.StringVar(&adminPass, "admin-pass", "", "Admin password to create/update")
 	flag.Parse()
 
 	// Check and setup sudoers configuration
@@ -367,6 +377,11 @@ func main() {
 
 	// Initialize Database Connection and Auto-Migrate
 	database.ConnectDB()
+
+	// Seed admin user if flags are provided
+	if adminUser != "" && adminPass != "" {
+		database.EnsureAdminUser(adminUser, adminPass)
+	}
 
 	// Initialize existing RAID arrays from system
 	database.InitializeRaidArraysFromSystem()
@@ -402,6 +417,27 @@ func main() {
 
 	// Setup Routes
 	routes.SetupSetup(app)
+
+	// Serve React/Svelte SPA via embed
+	app.Use("/", filesystem.New(filesystem.Config{
+		Root:       http.FS(embeddedFiles),
+		PathPrefix: "public",
+		Browse:     false,
+	}))
+
+	// Fallback to index.html for SPA routing (must be placed AFTER API routes)
+	app.Use(func(c *fiber.Ctx) error {
+		// Only redirect to index.html for GET requests that don't start with /api
+		if c.Method() == fiber.MethodGet && !strings.HasPrefix(c.Path(), "/api/") {
+			file, err := embeddedFiles.ReadFile("public/index.html")
+			if err != nil {
+				return c.Status(fiber.StatusInternalServerError).SendString("index.html not found")
+			}
+			c.Set("Content-Type", "text/html; charset=utf-8")
+			return c.Send(file)
+		}
+		return c.Next()
+	})
 
 	// Start Server
 	log.Fatal(app.Listen(":3000"))

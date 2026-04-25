@@ -114,8 +114,12 @@ func RefreshFileWatcher() {
 					}
 					
 					if hostUser != "" {
-						// Grant the current user explicit access via ACL
+						// Grant access to the target folder AND the parent folder
+						parentDir := filepath.Dir(originPath)
+						log.Printf("🔑 Granting ACL access to parent: %s", parentDir)
+						exec.Command("sudo", "setfacl", "-m", "u:"+hostUser+":rwx", parentDir).Run()
 						exec.Command("sudo", "setfacl", "-m", "u:"+hostUser+":rwx", originPath).Run()
+						
 						// Try adding again after the ACL fix
 						err = watcher.Add(originPath)
 					}

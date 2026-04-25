@@ -380,16 +380,22 @@ func detectRaidArrays() map[string]string {
 	// Check each device for md children
 	if blockdevices, ok := lsblkData["blockdevices"].([]interface{}); ok {
 		for _, bd := range blockdevices {
-			if bdMap, ok := bd.(map[string]interface{}); ok {
-				// Check if has raid child
-				if children, ok := bdMap["children"].([]interface{}); ok {
-					for _, child := range children {
-						if childMap, ok := child.(map[string]interface{}); ok {
-							if childType, ok := childMap["type"].(string); ok && childType == "raid" {
-								// Parent device has a raid child, mark it
-								if name, ok := bdMap["name"].(string); ok {
-									raidMap["/dev/"+name] = "has_raid_child"
-								}
+			bdMap, _ := bd.(map[string]interface{})
+			name, _ := bdMap["name"].(string)
+			
+			// Check if this device name appears in /proc/mdstat
+			mdstat, _ := os.ReadFile("/proc/mdstat")
+			if name != "" && strings.Contains(string(mdstat), name) {
+				raidMap["/dev/"+name] = "active_in_mdstat"
+			}
+
+			// Check if has raid child via lsblk
+			if children, ok := bdMap["children"].([]interface{}); ok {
+				for _, child := range children {
+					if childMap, ok := child.(map[string]interface{}); ok {
+						if childType, ok := childMap["type"].(string); ok && (childType == "raid" || childType == "raid1") {
+							if name != "" {
+								raidMap["/dev/"+name] = "has_raid_child"
 							}
 						}
 					}
@@ -412,6 +418,12 @@ func hardenDeviceCleanup(device string) error {
 
 	// 2. Identify and stop MD devices using this disk
 	devName := filepath.Base(device)
+	
+	// CRITICAL: Wipe RAID superblocks first so the kernel releases its hold
+	log.Printf("[NAS] Wiping RAID superblocks on %s...", device)
+	exec.Command("sudo", "mdadm", "--zero-superblock", "--force", device).Run()
+	exec.Command("sudo", "mdadm", "--zero-superblock", "--force", device+"1").Run()
+
 	mdstat, _ := os.ReadFile("/proc/mdstat")
 	if strings.Contains(string(mdstat), devName) {
 		log.Printf("[NAS] Found device in /proc/mdstat, attempting to stop related RAID arrays")
@@ -422,7 +434,6 @@ func hardenDeviceCleanup(device string) error {
 				exec.Command("sudo", "mdadm", "--stop", mdDev).Run()
 			}
 		}
-		// Also check /dev/md127, md126 etc
 		for i := 127; i > 120; i-- {
 			mdDev := fmt.Sprintf("/dev/md%d", i)
 			if _, err := os.Stat(mdDev); err == nil {
@@ -433,24 +444,23 @@ func hardenDeviceCleanup(device string) error {
 
 	// 3. Remove Device Mapper mappings
 	exec.Command("sudo", "dmsetup", "remove", "--force", devName).Run()
-	exec.Command("sudo", "dm_release", device).Run() // Some systems use this
 
-	// 4. Force release handles and clear partitions
-	exec.Command("sudo", "blockdev", "--flushbufs", device).Run()
-
-	// 5. THE NUCLEAR OPTION: Wipe first 20MB to kill partition tables and RAID/LVM headers
+	// 4. THE NUCLEAR OPTION: Wipe first 50MB and create new label
+	log.Printf("[NAS] Force-creating new GPT label on %s...", device)
+	exec.Command("sudo", "parted", "-s", device, "mklabel", "gpt").Run()
+	
 	log.Printf("[NAS] Wiping disk headers with dd...")
-	exec.Command("sudo", "dd", "if=/dev/zero", "of="+device, "bs=1M", "count=20", "conv=notrunc").Run()
+	exec.Command("sudo", "dd", "if=/dev/zero", "of="+device, "bs=1M", "count=50", "conv=notrunc").Run()
 
-	// 6. Clear signatures again
+	// 5. Clear signatures again
 	exec.Command("sudo", "wipefs", "-a", "-f", device).Run()
 
-	// 7. Refresh kernel and settle udev
+	// 6. Refresh kernel and settle udev
 	exec.Command("sudo", "udevadm", "settle").Run()
 	exec.Command("sudo", "partprobe", device).Run()
 	exec.Command("sudo", "sync").Run()
 
-	time.Sleep(2 * time.Second) // Let the kernel breathe
+	time.Sleep(3 * time.Second) // Let the kernel breathe
 	log.Printf("[NAS] NUCLEAR CLEANUP COMPLETE for: %s", device)
 
 	return nil

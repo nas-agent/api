@@ -228,6 +228,11 @@ func watchEventLoop() {
 				database.DB.Where("user_id = ?", userID).First(&userAIConfig)
 				
 				go func(p string, n string, uid string, cfg models.UserAIConfig) {
+					defer func() {
+						if r := recover(); r != nil {
+							log.Printf("🔥 CRITICAL: Panic in processNewFile for %s: %v", n, r)
+						}
+					}()
 					processNewFile(p, n, uid, cfg)
 					// Clean up processing map after some time
 					time.Sleep(10 * time.Second)
@@ -356,34 +361,51 @@ func processNewFile(sourcePath, fileName string, userID string, userAIConfig mod
 		}
 
 		destPath := filepath.Clean(userAIConfig.DestinationPath)
-		// ... existing move logic ...
 		targetDir := filepath.Join(destPath, selectedFolder)
 		log.Printf("[Cleaner] Decision: Move %s to %s", fileName, targetDir)
-		os.MkdirAll(targetDir, os.ModePerm)
+		
+		if err := os.MkdirAll(targetDir, os.ModePerm); err != nil {
+			log.Printf("❌ Error creating target directory %s: %v", targetDir, err)
+			return
+		}
 
 		destFileName := fileName
 		if userAIConfig.RenameFile && aiResp.SuggestedName != "" {
-			destFileName = aiResp.SuggestedName
+			// Preserve extension
+			ext := filepath.Ext(fileName)
+			suggested := aiResp.SuggestedName
+			if !strings.HasSuffix(strings.ToLower(suggested), strings.ToLower(ext)) {
+				destFileName = suggested + ext
+			} else {
+				destFileName = suggested
+			}
+			log.Printf("📝 Renaming file: %s -> %s", fileName, destFileName)
 		}
 		
 		// Ensure unique name in target directory
 		destFileName = EnsureUniqueName(targetDir, destFileName)
 		finalDestPath := filepath.Join(targetDir, destFileName)
 
+		log.Printf("🚚 Moving file to: %s", finalDestPath)
 		err := copyFile(sourcePath, finalDestPath)
 		if err != nil {
-			log.Printf("❌ Error moving file to NAS: %v", err)
+			log.Printf("❌ Error copying file to NAS: %v", err)
 			return
 		}
 
-		os.Remove(sourcePath)
+		if err := safeRemove(sourcePath); err != nil {
+			log.Printf("⚠️ File copied but could not remove original: %v", err)
+		} else {
+			log.Printf("🗑️ Original file removed: %s", sourcePath)
+		}
 		
 		// Update Metadata with final path
 		metadata.NASPath = finalDestPath
+		metadata.FileName = destFileName
 		database.DB.Save(&metadata)
 
 		log.Printf("✅ Categorized and moved file to: %s", finalDestPath)
-		NotifyFileMoved(fileName, selectedFolder)
+		NotifyFileMoved(destFileName, selectedFolder)
 	} else {
 		log.Printf("ℹ️ File NOT moved. DestinationPath='%s', AutoSelectFolder=%v", userAIConfig.DestinationPath, userAIConfig.AutoSelectFolder)
 	}
@@ -419,7 +441,13 @@ func triggerAIAnalysis(fileID uint, filePath string, fileName string, userID str
 		if err != nil && strings.Contains(err.Error(), "permission denied") {
 			// Try to fix permission on the file itself
 			log.Printf("🔑 File locked/permission denied for streaming: %s. Applying ACL...", fileName)
-			exec.Command("sudo", "setfacl", "-m", "u:pi:r", filePath).Run()
+			
+			// Try to detect user again for ACL
+			hostUser := os.Getenv("USER")
+			if hostUser == "" {
+				hostUser = "pi" // Fallback to pi
+			}
+			exec.Command("sudo", "setfacl", "-m", "u:"+hostUser+":r", filePath).Run()
 			fileBytes, err = os.ReadFile(filePath)
 		}
 
@@ -654,19 +682,31 @@ func triggerBatchClustering(userID string, summaries []MetadataOnlySummary, exis
 func ExecuteInPlaceMove(sourcePath, fileName, suggestedName, targetFolder, originPath, userID string) {
 	// Create subfolder directly in originPath
 	targetDir := filepath.Join(originPath, targetFolder)
-	os.MkdirAll(targetDir, os.ModePerm)
+	if err := os.MkdirAll(targetDir, os.ModePerm); err != nil {
+		log.Printf("❌ [ExecuteInPlace] Error creating target directory %s: %v", targetDir, err)
+		return
+	}
 
 	finalName := fileName
 	if suggestedName != "" {
-		finalName = suggestedName
+		// Preserve extension
+		ext := filepath.Ext(fileName)
+		if !strings.HasSuffix(strings.ToLower(suggestedName), strings.ToLower(ext)) {
+			finalName = suggestedName + ext
+		} else {
+			finalName = suggestedName
+		}
 	}
 
 	finalName = EnsureUniqueName(targetDir, finalName)
 	destPath := filepath.Join(targetDir, finalName)
 	
+	log.Printf("🚚 [ExecuteInPlace] Moving %s -> %s", fileName, destPath)
 	err := copyFile(sourcePath, destPath)
 	if err == nil {
-		os.Remove(sourcePath)
+		if err := safeRemove(sourcePath); err != nil {
+			log.Printf("⚠️ [ExecuteInPlace] File copied but could not remove original: %v", err)
+		}
 		// Update DB metadata with new in-place location
 		var meta models.FileMetadata
 		if err := database.DB.Where("nas_path = ? AND owner_id = ?", sourcePath, userID).First(&meta).Error; err == nil {
@@ -693,6 +733,25 @@ func copyFile(src, dst string) error {
 
 	_, err = io.Copy(destination, source)
 	return err
+}
+
+func safeRemove(path string) error {
+	var lastErr error
+	for i := 0; i < 5; i++ {
+		err := os.Remove(path)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		// Check for common lock/busy errors
+		errMsg := strings.ToLower(err.Error())
+		if strings.Contains(errMsg, "busy") || strings.Contains(errMsg, "locked") || strings.Contains(errMsg, "denied") {
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+		break
+	}
+	return lastErr
 }
 
 

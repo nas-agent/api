@@ -37,6 +37,7 @@ type AITriggerPayload struct {
 
 type AIAnalysisResponse struct {
 	SuggestedFolder string              `json:"suggested_folder"`
+	SuggestedName   string              `json:"suggested_name"`
 	Tags            []string            `json:"tags"`
 	ConfidenceScore int                 `json:"confidence_score"`
 	Embedding       []float32           `json:"embedding"`
@@ -211,11 +212,14 @@ type ClusterRequest struct {
 	FolderProfiles  map[string]string     `json:"folder_profiles"`
 	GeminiAPIKey    string                `json:"gemini_api_key"`
 	GeminiModel     string                `json:"gemini_model"`
+	RenameFile      bool                  `json:"rename_file"`
+	RenameFormat    string                `json:"rename_format"`
 }
 
 // ClusterResponse is the "Master Plan" returned by the AI Agent
 type ClusterResponse struct {
 	FolderMap map[string]string `json:"folder_map"`
+	NameMap   map[string]string `json:"name_map"`
 	Rationale string            `json:"rationale"`
 }
 
@@ -284,6 +288,12 @@ func processNewFile(sourcePath, fileName string, userID string, userAIConfig mod
 		os.MkdirAll(targetDir, os.ModePerm)
 
 		destFileName := fileName
+		if userAIConfig.RenameFile && aiResp.SuggestedName != "" {
+			destFileName = aiResp.SuggestedName
+		}
+		
+		// Ensure unique name in target directory
+		destFileName = EnsureUniqueName(targetDir, destFileName)
 		finalDestPath := filepath.Join(targetDir, destFileName)
 
 		err := copyFile(sourcePath, finalDestPath)
@@ -465,8 +475,13 @@ func ScanOrigin(userID string, customPath string) (int, error) {
 			continue
 		}
 		
+		suggestedName := ""
+		if userAIConfig.RenameFile {
+			suggestedName = clusterResp.NameMap[f.Name]
+		}
+
 		// Move files IN-PLACE (into subfolders of originPath)
-		ExecuteInPlaceMove(f.Path, f.Name, targetSubfolder, originPath, userID)
+		ExecuteInPlaceMove(f.Path, f.Name, suggestedName, targetSubfolder, originPath, userID)
 		filesMoved++
 	}
 
@@ -506,6 +521,8 @@ func triggerBatchClustering(userID string, summaries []MetadataOnlySummary, exis
 		FolderProfiles:  profiles,
 		GeminiAPIKey:    userAIConfig.GeminiAPIKey,
 		GeminiModel:     userAIConfig.GeminiModel,
+		RenameFile:      userAIConfig.RenameFile,
+		RenameFormat:    userAIConfig.RenameFormat,
 	}
 
 	jsonData, _ := json.Marshal(payload)
@@ -538,12 +555,18 @@ func triggerBatchClustering(userID string, summaries []MetadataOnlySummary, exis
 	return &clusterResp, nil
 }
 
-func ExecuteInPlaceMove(sourcePath, fileName, targetFolder, originPath, userID string) {
+func ExecuteInPlaceMove(sourcePath, fileName, suggestedName, targetFolder, originPath, userID string) {
 	// Create subfolder directly in originPath
 	targetDir := filepath.Join(originPath, targetFolder)
 	os.MkdirAll(targetDir, os.ModePerm)
 
-	destPath := filepath.Join(targetDir, fileName)
+	finalName := fileName
+	if suggestedName != "" {
+		finalName = suggestedName
+	}
+
+	finalName = EnsureUniqueName(targetDir, finalName)
+	destPath := filepath.Join(targetDir, finalName)
 	
 	err := copyFile(sourcePath, destPath)
 	if err == nil {
@@ -552,9 +575,10 @@ func ExecuteInPlaceMove(sourcePath, fileName, targetFolder, originPath, userID s
 		var meta models.FileMetadata
 		if err := database.DB.Where("nas_path = ? AND owner_id = ?", sourcePath, userID).First(&meta).Error; err == nil {
 			meta.NASPath = destPath
+			meta.FileName = finalName
 			database.DB.Save(&meta)
 		}
-		log.Printf("[Cleaner] Organized %s -> %s", fileName, targetFolder)
+		log.Printf("[Cleaner] Organized %s -> %s", finalName, targetFolder)
 	}
 }
 

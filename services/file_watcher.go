@@ -159,15 +159,22 @@ func watchEventLoop() {
 				return
 			}
 
-			// Detect file creation OR file rename/move (files moved to watched folder)
-			if event.Has(fsnotify.Create) || event.Has(fsnotify.Rename) {
-				log.Printf("Watcher event detected [%s]: %s", eventTypeString(event.Op), event.Name)
+			// LOG EVERY EVENT for diagnosis
+			log.Printf("🔍 Watcher RAW EVENT: %s (Op: %s)", event.Name, event.Op.String())
 
+			// Detect file creation, rename, OR write completion
+			if event.Has(fsnotify.Create) || event.Has(fsnotify.Rename) || event.Has(fsnotify.Write) {
+				// Avoid processing temporary or hidden files
 				fileName := filepath.Base(event.Name)
 				if strings.HasPrefix(fileName, ".") || strings.HasSuffix(fileName, ".tmp") || strings.HasSuffix(fileName, ".crdownload") {
 					log.Printf("Skipping temporary/hidden file: %s", fileName)
 					continue
 				}
+
+				// Small delay to ensure file is fully written if it was a large copy
+				time.Sleep(500 * time.Millisecond)
+
+				log.Printf("🚀 Triggering AI Analysis for: %s", event.Name)
 
 				// Check if file still exists (in case it was moved away)
 				if _, err := os.Stat(event.Name); err != nil {

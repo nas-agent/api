@@ -94,6 +94,21 @@ func (s *SambaService) SyncSambaUser(username, password string) error {
 		log.Printf("Warning: failed to chmod %s: %v", homePath, err)
 	}
 
+	// ACL VIP Pass: Grant the host user (running the API) explicit permissions
+	// This solves the 'Permission Denied' for the File Watcher permanently
+	hostUser := os.Getenv("USER")
+	if hostUser == "" {
+		if out, err := exec.Command("whoami").Output(); err == nil {
+			hostUser = strings.TrimSpace(string(out))
+		}
+	}
+	if hostUser != "" {
+		log.Printf("Granting host user '%s' ACL permissions to %s...", hostUser, homePath)
+		exec.Command("sudo", "setfacl", "-R", "-m", "u:"+hostUser+":rwx", homePath).Run()
+		// Also set default ACL so new files inherit these permissions
+		exec.Command("sudo", "setfacl", "-R", "-d", "-m", "u:"+hostUser+":rwx", homePath).Run()
+	}
+
 	return nil
 }
 

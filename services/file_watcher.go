@@ -104,10 +104,21 @@ func RefreshFileWatcher() {
 			err = watcher.Add(originPath)
 			if err != nil {
 				if strings.Contains(err.Error(), "permission denied") {
-					log.Printf("⚠️ Permission denied for %s. (Host may need to restart API to apply 'sambashare' group rights)", originPath)
-					// Safety fallback: ensure directory is at least group-readable
-					exec.Command("sudo", "chmod", "g+rx", originPath).Run()
-					err = watcher.Add(originPath)
+					log.Printf("⚠️ Permission denied for %s. Applying ACL VIP Pass...", originPath)
+					
+					hostUser := os.Getenv("USER")
+					if hostUser == "" {
+						if out, err := exec.Command("whoami").Output(); err == nil {
+							hostUser = strings.TrimSpace(string(out))
+						}
+					}
+					
+					if hostUser != "" {
+						// Grant the current user explicit access via ACL
+						exec.Command("sudo", "setfacl", "-m", "u:"+hostUser+":rwx", originPath).Run()
+						// Try adding again after the ACL fix
+						err = watcher.Add(originPath)
+					}
 				}
 			}
 

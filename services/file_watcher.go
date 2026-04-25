@@ -426,10 +426,12 @@ func triggerAIAnalysis(fileID uint, filePath string, fileName string, userID str
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-API-Key", aiConfig.APIKey)
 
-	client := &http.Client{}
+	client := &http.Client{
+		Timeout: 5 * time.Minute,
+	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("AI analysis request failed: %v", err)
 	}
 	defer resp.Body.Close()
 

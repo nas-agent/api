@@ -58,7 +58,7 @@ func UpdateAIConfig(c *fiber.Ctx) error {
 	originalDestPath := config.DestinationPath
 
 	if config.OriginPath != "" {
-		if translated, err := translator.TranslatePath(config.OriginPath); err == nil {
+		if translated, err := translator.TranslatePath(userID, config.OriginPath); err == nil {
 			config.OriginPath = translated
 			log.Printf("Translated origin path: %s -> %s", originalOriginPath, config.OriginPath)
 		} else {
@@ -68,7 +68,7 @@ func UpdateAIConfig(c *fiber.Ctx) error {
 	}
 
 	if config.DestinationPath != "" {
-		if translated, err := translator.TranslatePath(config.DestinationPath); err == nil {
+		if translated, err := translator.TranslatePath(userID, config.DestinationPath); err == nil {
 			config.DestinationPath = translated
 			log.Printf("Translated destination path: %s -> %s", originalDestPath, config.DestinationPath)
 		} else {

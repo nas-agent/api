@@ -5,6 +5,7 @@ import (
 	"log"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 // GetSMBConfig returns SMB configuration for frontend path mapping
@@ -38,8 +39,19 @@ func TranslatePath(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
 	}
 
+	userID := ""
+	if raw := c.Locals("user"); raw != nil {
+		if token, ok := raw.(*jwt.Token); ok {
+			if claims, ok := token.Claims.(jwt.MapClaims); ok {
+				if v, ok := claims["user_id"].(string); ok {
+					userID = v
+				}
+			}
+		}
+	}
+
 	translator := services.NewPathTranslator()
-	translatedPath, err := translator.TranslatePath(req.Path)
+	translatedPath, err := translator.TranslatePath(userID, req.Path)
 
 	resp := TranslatePathResponse{
 		OriginalPath: req.Path,

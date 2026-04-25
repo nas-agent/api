@@ -34,7 +34,7 @@ func TriggerManualScan(c *fiber.Ctx) error {
 	targetPath := ""
 	if req.Path != "" {
 		translator := services.NewPathTranslator()
-		translated, err := translator.TranslatePath(req.Path)
+		translated, err := translator.TranslatePath(userID, req.Path)
 		if err == nil {
 			targetPath = translated
 		} else {

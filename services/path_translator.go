@@ -1,10 +1,13 @@
 package services
 
 import (
+	"api/database"
+	"api/models"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -32,11 +35,11 @@ func NewPathTranslator() *PathTranslator {
 
 // TranslatePath converts any path format to canonical Linux path
 // Supports:
-// - Windows drive letters: Z:\faan -> /srv/samba/homes/faan
-// - UNC paths: \\192.168.100.192\faan -> /srv/samba/homes/faan
-// - SMB shares: \\rpi-hostname\faan -> /srv/samba/homes/faan
-// - Already-Linux paths: /srv/samba/homes/faan -> /srv/samba/homes/faan
-func (pt *PathTranslator) TranslatePath(inputPath string) (string, error) {
+// - Windows drive letters: Z:\faan -> /mnt/suanton/homes/faan
+// - UNC paths: \\192.168.100.192\faan -> /mnt/suanton/homes/faan
+// - SMB shares: \\rpi-hostname\faan -> /mnt/suanton/homes/faan
+// - Already-Linux paths: /mnt/suanton/homes/faan -> /mnt/suanton/homes/faan
+func (pt *PathTranslator) TranslatePath(userID string, inputPath string) (string, error) {
 	if inputPath == "" {
 		return "", fmt.Errorf("empty path")
 	}
@@ -82,13 +85,27 @@ func (pt *PathTranslator) TranslatePath(inputPath string) (string, error) {
 		}
 
 		if isLocalHost {
-			// Build path: Samba home base + share name + subpath
-			result := pt.SambaHomeBase + "/" + shareName
-			if subpath != "" {
-				result += "/" + subpath
+			// Find the user's share path from the database
+			var share models.Share
+			if err := database.DB.Where("owner_id = ? AND type = 'Private'", userID).First(&share).Error; err != nil {
+				return "", fmt.Errorf("could not find private share for user: %v", err)
 			}
-			log.Printf("[PathTranslator] Translated UNC path: %s -> %s", inputPath, result)
-			return result, nil
+
+			// Build path: Share's real path + subpath (if any)
+			// The shareName in UNC is usually just the username or share name
+			result := share.Path
+			if subpath != "" {
+				// If the UNC path was \\host\share\folder, we need to handle if 'share' matches our share name
+				if !strings.EqualFold(shareName, share.Name) {
+					// If it's a sub-folder of the share, append it
+					result = filepath.Join(result, subpath)
+				} else {
+					// If it's just the share, result is already share.Path
+					result = filepath.Join(result, subpath)
+				}
+			}
+			log.Printf("[PathTranslator] Translated UNC path via DB: %s -> %s", inputPath, result)
+			return filepath.Clean(result), nil
 		}
 
 		return "", fmt.Errorf("unknown SMB host: %s", host)
@@ -111,16 +128,16 @@ func (pt *PathTranslator) TranslatePath(inputPath string) (string, error) {
 			return result, nil
 		}
 
-		// Smart fallback: assume unknown Windows drive letters map to Samba home base
-		// This is reasonable because:
-		// - Most Windows clients access SMB shares through mapped drive letters
-		// - All mapped drives likely point to the same Samba server
-		// - So Z:\faan, Y:\faan, etc. all resolve to /srv/samba/homes/faan
-		// Example: Z:\faan\Documents -> /srv/samba/homes/faan/Documents
+		// Accurate translation: lookup the user's private share path
+		var share models.Share
+		if err := database.DB.Where("owner_id = ? AND type = 'Private'", userID).First(&share).Error; err != nil {
+			return "", fmt.Errorf("could not find private share for user: %v", err)
+		}
+
 		unixPath := strings.ReplaceAll(windowsPath, "\\", "/")
-		result := pt.SambaHomeBase + "/" + unixPath
-		log.Printf("[PathTranslator] Translated Windows path (auto-detected): %s -> %s (assumed drive letter maps to Samba home)", inputPath, result)
-		return result, nil
+		result := filepath.Join(share.Path, unixPath)
+		log.Printf("[PathTranslator] Translated Windows path via DB: %s -> %s", inputPath, result)
+		return filepath.Clean(result), nil
 	}
 
 	return "", fmt.Errorf("unsupported path format: %s", inputPath)

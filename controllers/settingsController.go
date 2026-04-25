@@ -52,6 +52,9 @@ func UpdateAIConfig(c *fiber.Ctx) error {
 		return c.Status(400).JSON(err.Error())
 	}
 
+	// LOG the received config for debugging
+	log.Printf("[AI Config] Received Update: Active=%v, AutoSelect=%v, Origin=%s", config.Active, config.AutoSelectFolder, config.OriginPath)
+
 	// Translate paths from any format (Windows drive letters, UNC, etc.) to Linux paths
 	translator := services.NewPathTranslator()
 	originalOriginPath := config.OriginPath

@@ -404,13 +404,15 @@ func triggerAIAnalysis(fileID uint, filePath string, fileName string, userID str
 		GeminiModel:      userAIConfig.GeminiModel,
 	}
 
-	if provider == "gemini" {
+	// 2. Decide if we should stream the file content (Always stream for Gemini or if file is small enough)
+	fileInfo, _ := os.Stat(filePath)
+	if fileInfo != nil && fileInfo.Size() < 20*1024*1024 { // 20MB limit for streaming
 		fileBytes, err := os.ReadFile(filePath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read file for Gemini payload: %v", err)
+		if err == nil {
+			payload.FileContentBase64 = base64.StdEncoding.EncodeToString(fileBytes)
+			payload.MimeType = detectMimeType(fileName)
+			log.Printf("[AI] Streaming file content to agent (%d bytes)", len(fileBytes))
 		}
-		payload.FileContentBase64 = base64.StdEncoding.EncodeToString(fileBytes)
-		payload.MimeType = detectMimeType(fileName)
 	}
 
 	jsonData, _ := json.Marshal(payload)

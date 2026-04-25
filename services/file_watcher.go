@@ -349,10 +349,16 @@ func processNewFile(sourcePath, fileName string, userID string, userAIConfig mod
 
 	// Move the file based on AI suggestion and confidence thresholds
 	if userAIConfig.DestinationPath != "" && userAIConfig.AutoSelectFolder {
-		destPath := filepath.Clean(userAIConfig.DestinationPath)
+		// SAFETY CHECK: Ensure the path is a Linux path, not a Windows drive letter
+		if !strings.HasPrefix(userAIConfig.DestinationPath, "/") {
+			log.Printf("⚠️ File NOT moved. DestinationPath '%s' is not a Linux path. Please use a folder on the NAS (Z:\\...).", userAIConfig.DestinationPath)
+			return
+		}
 
-		// Proceed with move
+		destPath := filepath.Clean(userAIConfig.DestinationPath)
+		// ... existing move logic ...
 		targetDir := filepath.Join(destPath, selectedFolder)
+		log.Printf("[Cleaner] Decision: Move %s to %s", fileName, targetDir)
 		os.MkdirAll(targetDir, os.ModePerm)
 
 		destFileName := fileName
@@ -366,7 +372,7 @@ func processNewFile(sourcePath, fileName string, userID string, userAIConfig mod
 
 		err := copyFile(sourcePath, finalDestPath)
 		if err != nil {
-			log.Printf("Error moving file to NAS: %v", err)
+			log.Printf("❌ Error moving file to NAS: %v", err)
 			return
 		}
 
@@ -376,8 +382,10 @@ func processNewFile(sourcePath, fileName string, userID string, userAIConfig mod
 		metadata.NASPath = finalDestPath
 		database.DB.Save(&metadata)
 
-		log.Printf("Categorized and moved file to: %s", finalDestPath)
+		log.Printf("✅ Categorized and moved file to: %s", finalDestPath)
 		NotifyFileMoved(fileName, selectedFolder)
+	} else {
+		log.Printf("ℹ️ File NOT moved. DestinationPath='%s', AutoSelectFolder=%v", userAIConfig.DestinationPath, userAIConfig.AutoSelectFolder)
 	}
 }
 

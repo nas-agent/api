@@ -417,35 +417,36 @@ func hardenDeviceCleanup(device string) error {
 	exec.Command("sudo", "swapoff", device+"2").Run()
 
 	// 2. Identify and stop MD devices using this disk
-	devName := filepath.Base(device)
+	devName := filepath.Base(device) // e.g., "sda"
 	
 	// CRITICAL: Wipe RAID superblocks first so the kernel releases its hold
 	log.Printf("[NAS] Wiping RAID superblocks on %s...", device)
 	exec.Command("sudo", "mdadm", "--zero-superblock", "--force", device).Run()
 	exec.Command("sudo", "mdadm", "--zero-superblock", "--force", device+"1").Run()
 
+	// Parse /proc/mdstat to find EXACT md devices using this disk
 	mdstat, _ := os.ReadFile("/proc/mdstat")
-	if strings.Contains(string(mdstat), devName) {
-		log.Printf("[NAS] Found device in /proc/mdstat, attempting to stop related RAID arrays")
-		// Try to stop common MD devices
-		for i := 0; i < 20; i++ {
-			mdDev := fmt.Sprintf("/dev/md%d", i)
-			if _, err := os.Stat(mdDev); err == nil {
+	mdstatStr := string(mdstat)
+	
+	// Example line: md127 : active raid1 sda1[0] sdb1[1]
+	// We look for "sda" in the line and extract the "mdX" part
+	lines := strings.Split(mdstatStr, "\n")
+	for _, line := range lines {
+		if strings.Contains(line, devName) {
+			parts := strings.Fields(line)
+			if len(parts) > 0 && strings.HasPrefix(parts[0], "md") {
+				mdDev := "/dev/" + parts[0]
+				log.Printf("[NAS] Stopping RAID device %s which is using %s", mdDev, device)
 				exec.Command("sudo", "mdadm", "--stop", mdDev).Run()
-			}
-		}
-		for i := 127; i > 120; i-- {
-			mdDev := fmt.Sprintf("/dev/md%d", i)
-			if _, err := os.Stat(mdDev); err == nil {
-				exec.Command("sudo", "mdadm", "--stop", mdDev).Run()
+				time.Sleep(500 * time.Millisecond)
 			}
 		}
 	}
 
-	// 3. Remove Device Mapper mappings
-	exec.Command("sudo", "dmsetup", "remove", "--force", devName).Run()
-
 	// 4. THE NUCLEAR OPTION: Wipe first 50MB and create new label
+	log.Printf("[NAS] Zapping all GPT/MBR structures on %s...", device)
+	exec.Command("sudo", "sgdisk", "--zap-all", device).Run()
+
 	log.Printf("[NAS] Force-creating new GPT label on %s...", device)
 	exec.Command("sudo", "parted", "-s", device, "mklabel", "gpt").Run()
 	

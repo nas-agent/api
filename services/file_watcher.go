@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"api/config"
@@ -47,10 +48,12 @@ type AIAnalysisResponse struct {
 }
 
 var (
-	watcher     *fsnotify.Watcher
-	watchMap    map[string]string
-	done        chan bool
-	aiSemaphore = make(chan struct{}, 2)
+	watcher         *fsnotify.Watcher
+	watchMap        map[string]string
+	done            chan bool
+	aiSemaphore     = make(chan struct{}, 2)
+	processingFiles map[string]time.Time
+	processingMu    sync.Mutex
 )
 
 // InitFileWatcher starts a background service monitoring origin paths
@@ -81,6 +84,7 @@ func RefreshFileWatcher() {
 
 	watchMap = make(map[string]string)
 	done = make(chan bool)
+	processingFiles = make(map[string]time.Time)
 
 	for _, userAIConfig := range configs {
 		if userAIConfig.OriginPath != "" && userAIConfig.Active {
@@ -189,10 +193,21 @@ func watchEventLoop() {
 					continue
 				}
 
-				// Small delay to ensure file is fully written if it was a large copy
-				time.Sleep(500 * time.Millisecond)
+				// 3. Debounce: If we already triggered this file in the last 2 seconds, skip
+				processingMu.Lock()
+				if lastTrigger, exists := processingFiles[event.Name]; exists {
+					if time.Since(lastTrigger) < 2*time.Second {
+						processingMu.Unlock()
+						continue
+					}
+				}
+				processingFiles[event.Name] = time.Now()
+				processingMu.Unlock()
 
-				// 3. Find associated User ID
+				// Small delay to ensure file is fully written if it was a large copy
+				time.Sleep(1 * time.Second)
+
+				// 4. Find associated User ID
 				dir := filepath.Clean(filepath.Dir(event.Name))
 				userID, exists := watchMap[dir]
 				if !exists {
@@ -212,7 +227,14 @@ func watchEventLoop() {
 				var userAIConfig models.UserAIConfig
 				database.DB.Where("user_id = ?", userID).First(&userAIConfig)
 				
-				go processNewFile(event.Name, fileName, userID, userAIConfig)
+				go func(p string, n string, uid string, cfg models.UserAIConfig) {
+					processNewFile(p, n, uid, cfg)
+					// Clean up processing map after some time
+					time.Sleep(10 * time.Second)
+					processingMu.Lock()
+					delete(processingFiles, p)
+					processingMu.Unlock()
+				}(event.Name, fileName, userID, userAIConfig)
 			}
 
 		case err, ok := <-watcher.Errors:
@@ -365,9 +387,14 @@ func triggerAIAnalysis(fileID uint, filePath string, fileName string, userID str
 		provider = "local"
 	}
 
+	// Translate path to Windows format if it's a remote agent
+	translator := NewPathTranslator()
+	winPath := translator.ToWindowsPath(userID, filePath)
+	log.Printf("[AI] Forwarding path to agent: %s", winPath)
+
 	payload := AITriggerPayload{
 		FileID:           fileID,
-		FilePath:         filePath,
+		FilePath:         winPath,
 		FileName:         fileName,
 		UserID:           userID,
 		ExistingFolders:  existingFolders,

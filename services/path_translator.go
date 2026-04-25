@@ -177,3 +177,31 @@ func (pt *PathTranslator) GetSMBConfig() map[string]interface{} {
 		"unc_path_format": fmt.Sprintf("\\\\%s\\{share_name}", pt.RpiIP),
 	}
 }
+
+// ToWindowsPath converts a Linux NAS path back to a Windows-friendly UNC path
+func (pt *PathTranslator) ToWindowsPath(userID string, linuxPath string) string {
+	// Find the user's private share
+	var share models.Share
+	if err := database.DB.Where("owner_id = ? AND type = 'Private'", userID).First(&share).Error; err != nil {
+		// Fallback to public share check if private not found
+		if err := database.DB.Where("type = 'Public'").First(&share).Error; err != nil {
+			return linuxPath
+		}
+	}
+
+	// Standardize paths
+	cleanLinux := filepath.Clean(linuxPath)
+	cleanShare := filepath.Clean(share.Path)
+
+	if strings.HasPrefix(cleanLinux, cleanShare) {
+		relPath, _ := filepath.Rel(cleanShare, cleanLinux)
+		// Construct UNC path: \\IP\share_name\subfolder\file.ext
+		uncPath := fmt.Sprintf("\\\\%s\\%s", pt.RpiIP, share.Name)
+		if relPath != "." {
+			uncPath = fmt.Sprintf("%s\\%s", uncPath, strings.ReplaceAll(relPath, "/", "\\"))
+		}
+		return uncPath
+	}
+
+	return linuxPath
+}

@@ -9,7 +9,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -106,28 +105,12 @@ func RefreshFileWatcher() {
 			os.MkdirAll(originPath, os.ModePerm)
 
 			err = watcher.Add(originPath)
-			if err != nil {
-				if strings.Contains(err.Error(), "permission denied") {
-					log.Printf("⚠️ Permission denied for %s. Applying ACL VIP Pass...", originPath)
-					
-					hostUser := os.Getenv("USER")
-					if hostUser == "" {
-						if out, err := exec.Command("whoami").Output(); err == nil {
-							hostUser = strings.TrimSpace(string(out))
-						}
-					}
-					
-					if hostUser != "" {
-						// Grant access to the target folder AND the parent folder
-						parentDir := filepath.Dir(originPath)
-						log.Printf("🔑 Granting ACL access to parent: %s", parentDir)
-						exec.Command("sudo", "setfacl", "-m", "u:"+hostUser+":rwx", parentDir).Run()
-						exec.Command("sudo", "setfacl", "-m", "u:"+hostUser+":rwx", originPath).Run()
-						
-						// Try adding again after the ACL fix
-						err = watcher.Add(originPath)
-					}
-				}
+			if err != nil && strings.Contains(err.Error(), "permission denied") {
+				log.Printf("⚠️ Permission denied for %s. Applying ACL VIP Pass...", originPath)
+				ApplyACLFix(originPath)
+				// Also try to fix the parent if it's the one blocking
+				ApplyACLFix(filepath.Dir(originPath))
+				err = watcher.Add(originPath)
 			}
 
 			if err != nil {
@@ -145,7 +128,12 @@ func RefreshFileWatcher() {
 				if strings.Contains(destPath, "\\") || (len(destPath) > 1 && destPath[1] == ':') {
 					log.Printf("Skipping Windows destination path for user %s: %s", userAIConfig.UserID, destPath)
 				} else if strings.HasPrefix(destPath, "/") {
-					os.MkdirAll(destPath, os.ModePerm)
+					if err := os.MkdirAll(destPath, os.ModePerm); err != nil && strings.Contains(err.Error(), "permission denied") {
+						log.Printf("⚠️ Permission denied for destination %s. Applying ACL...", destPath)
+						ApplyACLFix(destPath)
+						ApplyACLFix(filepath.Dir(destPath))
+						os.MkdirAll(destPath, os.ModePerm)
+					}
 				}
 			}
 		}
@@ -176,7 +164,7 @@ func watchEventLoop() {
 				fileInfo, err := os.Stat(event.Name)
 				if err == nil && fileInfo.IsDir() {
 					log.Printf("📂 New subfolder detected: %s. Adding to watcher...", event.Name)
-					
+
 					// Find the userID for this branch
 					parentDir := filepath.Clean(filepath.Dir(event.Name))
 					if userID, exists := watchMap[parentDir]; exists {
@@ -226,7 +214,7 @@ func watchEventLoop() {
 				log.Printf("🚀 Triggering AI Analysis for: %s (User: %s)", event.Name, userID)
 				var userAIConfig models.UserAIConfig
 				database.DB.Where("user_id = ?", userID).First(&userAIConfig)
-				
+
 				go func(p string, n string, uid string, cfg models.UserAIConfig) {
 					defer func() {
 						if r := recover(); r != nil {
@@ -325,7 +313,7 @@ func processNewFile(sourcePath, fileName string, userID string, userAIConfig mod
 	aiSemaphore <- struct{}{}
 	aiResp, err := triggerAIAnalysis(metadata.ID, sourcePath, fileName, userID, existingFolders, folderProfiles, userAIConfig)
 	<-aiSemaphore
-	
+
 	if err != nil {
 		log.Printf("AI Analysis failed for %s: %v. File will remain in origin.", fileName, err)
 		return
@@ -363,10 +351,18 @@ func processNewFile(sourcePath, fileName string, userID string, userAIConfig mod
 		destPath := filepath.Clean(userAIConfig.DestinationPath)
 		targetDir := filepath.Join(destPath, selectedFolder)
 		log.Printf("[Cleaner] Decision: Move %s to %s", fileName, targetDir)
-		
+
 		if err := os.MkdirAll(targetDir, os.ModePerm); err != nil {
-			log.Printf("❌ Error creating target directory %s: %v", targetDir, err)
-			return
+			if strings.Contains(err.Error(), "permission denied") {
+				log.Printf("⚠️ Permission denied creating %s. Applying ACL VIP Pass...", targetDir)
+				ApplyACLFix(destPath) // Fix the base destination folder
+				err = os.MkdirAll(targetDir, os.ModePerm)
+			}
+
+			if err != nil {
+				log.Printf("❌ Error creating target directory %s: %v", targetDir, err)
+				return
+			}
 		}
 
 		destFileName := fileName
@@ -381,7 +377,7 @@ func processNewFile(sourcePath, fileName string, userID string, userAIConfig mod
 			}
 			log.Printf("📝 Renaming file: %s -> %s", fileName, destFileName)
 		}
-		
+
 		// Ensure unique name in target directory
 		destFileName = EnsureUniqueName(targetDir, destFileName)
 		finalDestPath := filepath.Join(targetDir, destFileName)
@@ -398,7 +394,7 @@ func processNewFile(sourcePath, fileName string, userID string, userAIConfig mod
 		} else {
 			log.Printf("🗑️ Original file removed: %s", sourcePath)
 		}
-		
+
 		// Update Metadata with final path
 		metadata.NASPath = finalDestPath
 		metadata.FileName = destFileName
@@ -441,13 +437,7 @@ func triggerAIAnalysis(fileID uint, filePath string, fileName string, userID str
 		if err != nil && strings.Contains(err.Error(), "permission denied") {
 			// Try to fix permission on the file itself
 			log.Printf("🔑 File locked/permission denied for streaming: %s. Applying ACL...", fileName)
-			
-			// Try to detect user again for ACL
-			hostUser := os.Getenv("USER")
-			if hostUser == "" {
-				hostUser = "pi" // Fallback to pi
-			}
-			exec.Command("sudo", "setfacl", "-m", "u:"+hostUser+":r", filePath).Run()
+			ApplyACLFix(filePath)
 			fileBytes, err = os.ReadFile(filePath)
 		}
 
@@ -522,7 +512,7 @@ func ScanOrigin(userID string, customPath string) (int, error) {
 	}
 
 	originPath := filepath.Clean(userAIConfig.OriginPath)
-	
+
 	// If a custom sub-path is provided, use it instead of the default origin
 	if customPath != "" {
 		// Basic security: if it's not absolute, join it with the base
@@ -598,7 +588,7 @@ func ScanOrigin(userID string, customPath string) (int, error) {
 		if targetSubfolder == "" {
 			continue
 		}
-		
+
 		suggestedName := ""
 		if userAIConfig.RenameFile {
 			suggestedName = clusterResp.NameMap[f.Name]
@@ -700,7 +690,7 @@ func ExecuteInPlaceMove(sourcePath, fileName, suggestedName, targetFolder, origi
 
 	finalName = EnsureUniqueName(targetDir, finalName)
 	destPath := filepath.Join(targetDir, finalName)
-	
+
 	log.Printf("🚚 [ExecuteInPlace] Moving %s -> %s", fileName, destPath)
 	err := copyFile(sourcePath, destPath)
 	if err == nil {
@@ -746,6 +736,10 @@ func safeRemove(path string) error {
 		// Check for common lock/busy errors
 		errMsg := strings.ToLower(err.Error())
 		if strings.Contains(errMsg, "busy") || strings.Contains(errMsg, "locked") || strings.Contains(errMsg, "denied") {
+			if strings.Contains(errMsg, "denied") {
+				ApplyACLFix(filepath.Dir(path))
+				ApplyACLFix(path)
+			}
 			time.Sleep(500 * time.Millisecond)
 			continue
 		}
@@ -753,5 +747,3 @@ func safeRemove(path string) error {
 	}
 	return lastErr
 }
-
-

@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -83,6 +84,7 @@ func (s *SambaService) SyncSambaUser(username, password string) error {
 
 	// Ensure sambashare group exists
 	_ = exec.Command("sudo", "groupadd", "-f", "sambashare").Run()
+	_ = exec.Command("sudo", "usermod", "-a", "-G", "sambashare", username).Run()
 
 	// Chown to user and sambashare group
 	if err := exec.Command("sudo", "chown", fmt.Sprintf("%s:sambashare", username), homePath).Run(); err != nil {
@@ -95,19 +97,7 @@ func (s *SambaService) SyncSambaUser(username, password string) error {
 	}
 
 	// ACL VIP Pass: Grant the host user (running the API) explicit permissions
-	// This solves the 'Permission Denied' for the File Watcher permanently
-	hostUser := os.Getenv("USER")
-	if hostUser == "" {
-		if out, err := exec.Command("whoami").Output(); err == nil {
-			hostUser = strings.TrimSpace(string(out))
-		}
-	}
-	if hostUser != "" {
-		log.Printf("Granting host user '%s' ACL permissions to %s...", hostUser, homePath)
-		exec.Command("sudo", "setfacl", "-R", "-m", "u:"+hostUser+":rwx", homePath).Run()
-		// Also set default ACL so new files inherit these permissions
-		exec.Command("sudo", "setfacl", "-R", "-d", "-m", "u:"+hostUser+":rwx", homePath).Run()
-	}
+	ApplyACLFix(homePath)
 
 	return nil
 }
@@ -133,8 +123,18 @@ func (s *SambaService) RegisterShare(name, path, owner string, isPublic bool) er
 	entry := fmt.Sprintf("\n[%s]\n   comment = %s\n   path = %s\n   browseable = yes\n   read only = no\n   guest ok = %s\n   force group = sambashare\n   create mask = 0660\n   force create mode = 0660\n   directory mask = 2770\n   force directory mode = 2770\n",
 		name, comment, path, map[bool]string{true: "yes", false: "no"}[isPublic])
 
-	if !isPublic && owner != "" {
-		entry += fmt.Sprintf("   valid users = %s\n", owner)
+	if !isPublic {
+		hostUser := GetHostUser()
+		validUsers := owner
+		if hostUser != "" && hostUser != owner {
+			validUsers = fmt.Sprintf("%s, %s", owner, hostUser)
+		}
+		if validUsers != "" {
+			entry += fmt.Sprintf("   valid users = %s\n", validUsers)
+		}
+		
+		// Also apply ACL fix to the shared path so the host can index it
+		ApplyACLFix(path)
 	}
 
 	// Append to smb.conf using tee
@@ -328,4 +328,37 @@ func (s *SambaService) PruneResources(dbShares []string, dbUsers []string) (int,
 	}
 
 	return prunedShares, prunedUsers, nil
+}
+
+// ApplyACLFix attempts to grant RWA access to the current host user via setfacl
+func ApplyACLFix(path string) {
+	hostUser := GetHostUser()
+	if hostUser == "" {
+		return
+	}
+
+	log.Printf("🔑 Granting ACL access (u:%s:rwx) to: %s", hostUser, path)
+	// Apply recursively and set as default for new files
+	exec.Command("sudo", "setfacl", "-R", "-m", "u:"+hostUser+":rwx", path).Run()
+	exec.Command("sudo", "setfacl", "-R", "-d", "-m", "u:"+hostUser+":rwx", path).Run()
+	
+	// Also ensure the parent is traversable
+	parent := filepath.Dir(path)
+	if parent != "." && parent != "/" {
+		exec.Command("sudo", "setfacl", "-m", "u:"+hostUser+":rwx", parent).Run()
+	}
+}
+
+// GetHostUser returns the username of the user running the Go process
+func GetHostUser() string {
+	hostUser := os.Getenv("USER")
+	if hostUser == "" {
+		if out, err := exec.Command("whoami").Output(); err == nil {
+			hostUser = strings.TrimSpace(string(out))
+		}
+	}
+	if hostUser == "" {
+		hostUser = "pi" // Fallback for common RPI environments
+	}
+	return hostUser
 }

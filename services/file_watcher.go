@@ -404,15 +404,26 @@ func triggerAIAnalysis(fileID uint, filePath string, fileName string, userID str
 		GeminiModel:      userAIConfig.GeminiModel,
 	}
 
-	// 2. Decide if we should stream the file content (Always stream for Gemini or if file is small enough)
-	fileInfo, _ := os.Stat(filePath)
-	if fileInfo != nil && fileInfo.Size() < 20*1024*1024 { // 20MB limit for streaming
+	// 2. Decide if we should stream the file content
+	fileInfo, err := os.Stat(filePath)
+	if err == nil && fileInfo.Size() < 20*1024*1024 {
 		fileBytes, err := os.ReadFile(filePath)
-		if err == nil {
+		if err != nil && strings.Contains(err.Error(), "permission denied") {
+			// Try to fix permission on the file itself
+			log.Printf("🔑 File locked/permission denied for streaming: %s. Applying ACL...", fileName)
+			exec.Command("sudo", "setfacl", "-m", "u:pi:r", filePath).Run()
+			fileBytes, err = os.ReadFile(filePath)
+		}
+
+		if err == nil && fileBytes != nil {
 			payload.FileContentBase64 = base64.StdEncoding.EncodeToString(fileBytes)
 			payload.MimeType = detectMimeType(fileName)
-			log.Printf("[AI] Streaming file content to agent (%d bytes)", len(fileBytes))
+			log.Printf("[AI] Successfully streaming file content (%d bytes)", len(fileBytes))
+		} else if err != nil {
+			log.Printf("⚠️ Streaming skipped: %v", err)
 		}
+	} else if err != nil {
+		log.Printf("⚠️ os.Stat failed for %s: %v", filePath, err)
 	}
 
 	jsonData, _ := json.Marshal(payload)

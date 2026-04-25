@@ -21,20 +21,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
-// AITriggerPayload represents the JSON payload sent to the Python AI node
-type AITriggerPayload struct {
-	FileID            uint              `json:"file_id"`
-	FilePath          string            `json:"file_path"`
-	FileName          string            `json:"file_name"`
-	UserID            string            `json:"user_id"`
-	ExistingFolders   []string          `json:"existing_folders"`
-	AnalysisProvider  string            `json:"analysis_provider"`
-	GeminiAPIKey      string            `json:"gemini_api_key"`
-	GeminiModel       string            `json:"gemini_model"`
-	FolderProfiles    map[string]string `json:"folder_profiles"`
-	FileContentBase64 string            `json:"file_content_base64,omitempty"`
-	MimeType          string            `json:"mime_type,omitempty"`
-}
+
 
 type AIAnalysisResponse struct {
 	SuggestedFolder string              `json:"suggested_folder"`
@@ -277,6 +264,26 @@ type ClusterRequest struct {
 	RenameFormat    string                `json:"rename_format"`
 }
 
+type AITriggerPayload struct {
+	FileID            uint              `json:"file_id"`
+	FilePath          string            `json:"file_path"`
+	FileName          string            `json:"file_name"`
+	UserID            string            `json:"user_id"`
+	FileContentBase64 string            `json:"file_content_base64,omitempty"`
+	MimeType          string            `json:"mime_type,omitempty"`
+	ExistingFolders   []string          `json:"existing_folders"`
+	FolderProfiles    map[string]string `json:"folder_profiles"`
+	GeminiAPIKey      string            `json:"gemini_api_key"`
+	GeminiModel       string            `json:"gemini_model"`
+	RenameFile        bool              `json:"rename_file"`
+	RenameFormat      string            `json:"rename_format"`
+	AnalysisProvider  string            `json:"analysis_provider"`
+}
+
+type JobResponse struct {
+	JobID string `json:"job_id"`
+}
+
 // ClusterResponse is the "Master Plan" returned by the AI Agent
 type ClusterResponse struct {
 	FolderMap map[string]string `json:"folder_map"`
@@ -428,6 +435,8 @@ func triggerAIAnalysis(fileID uint, filePath string, fileName string, userID str
 		AnalysisProvider: provider,
 		GeminiAPIKey:     userAIConfig.GeminiAPIKey,
 		GeminiModel:      userAIConfig.GeminiModel,
+		RenameFile:       userAIConfig.RenameFile,
+		RenameFormat:     userAIConfig.RenameFormat,
 	}
 
 	// 2. Decide if we should stream the file content
@@ -456,6 +465,7 @@ func triggerAIAnalysis(fileID uint, filePath string, fileName string, userID str
 	aiConfig := config.GetAIServiceConfig()
 	aiEndpoint := aiConfig.Endpoint("/api/analyze/file")
 
+	// Step 1: Submit the job
 	req, err := http.NewRequest("POST", aiEndpoint, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, err
@@ -463,26 +473,62 @@ func triggerAIAnalysis(fileID uint, filePath string, fileName string, userID str
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-API-Key", aiConfig.APIKey)
 
-	client := &http.Client{
-		Timeout: 5 * time.Minute,
-	}
+	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("AI analysis request failed: %v", err)
+		return nil, fmt.Errorf("failed to submit AI job: %v", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("AI node returned %d: %s", resp.StatusCode, string(bodyBytes))
+		return nil, fmt.Errorf("AI node rejected job (%d): %s", resp.StatusCode, string(bodyBytes))
 	}
 
-	var aiResponse AIAnalysisResponse
-	if err := json.NewDecoder(resp.Body).Decode(&aiResponse); err != nil {
-		return nil, fmt.Errorf("failed to decode AI JSON response: %v", err)
+	var jobResp JobResponse
+	if err := json.NewDecoder(resp.Body).Decode(&jobResp); err != nil {
+		return nil, fmt.Errorf("failed to decode job ID: %v", err)
 	}
 
-	return &aiResponse, nil
+	jobID := jobResp.JobID
+	log.Printf("[AI] Job submitted successfully. JobID: %s. Polling for results...", jobID)
+
+	// Step 2: Poll for results
+	statusEndpoint := aiConfig.Endpoint("/api/analyze/status/" + jobID)
+	maxRetries := 60 // 60 * 5 seconds = 5 minutes
+	
+	for i := 0; i < maxRetries; i++ {
+		// Wait before polling
+		time.Sleep(5 * time.Second)
+
+		pollReq, _ := http.NewRequest("GET", statusEndpoint, nil)
+		pollReq.Header.Set("X-API-Key", aiConfig.APIKey)
+		
+		pollResp, err := client.Do(pollReq)
+		if err != nil {
+			log.Printf("⚠️ Polling error (retry %d/%d): %v", i+1, maxRetries, err)
+			continue
+		}
+		
+		if pollResp.StatusCode == http.StatusOK {
+			var aiResponse AIAnalysisResponse
+			if err := json.NewDecoder(pollResp.Body).Decode(&aiResponse); err == nil {
+				// If summary is "PENDING", it's still processing
+				if aiResponse.Summary != "PENDING" {
+					pollResp.Body.Close()
+					log.Printf("[AI] Job %s completed successfully.", jobID)
+					return &aiResponse, nil
+				}
+			}
+		} else if pollResp.StatusCode != http.StatusAccepted && pollResp.StatusCode != http.StatusOK {
+			bodyBytes, _ := io.ReadAll(pollResp.Body)
+			pollResp.Body.Close()
+			return nil, fmt.Errorf("AI node returned error during polling (%d): %s", pollResp.StatusCode, string(bodyBytes))
+		}
+		pollResp.Body.Close()
+	}
+
+	return nil, fmt.Errorf("AI analysis timed out after 5 minutes (Job %s)", jobID)
 }
 
 func detectMimeType(fileName string) string {

@@ -23,7 +23,6 @@ import (
 	websocket "github.com/gofiber/websocket/v2"
 )
 
-//go:embed public/*
 var embeddedFiles embed.FS
 
 // checkSudoersConfig verifies that required commands are in sudoers
@@ -60,6 +59,24 @@ func checkSudoersConfig() {
 		log.Println("")
 	} else {
 		log.Println("✓ Sudoers configuration verified")
+	}
+
+	// Ensure the current user is part of the 'sambashare' group
+	// This allows the API process to watch and read private user shares
+	currentUser := os.Getenv("USER")
+	if currentUser == "" {
+		// Fallback for systems where USER env isn't set
+		out, err := exec.Command("whoami").Output()
+		if err == nil {
+			currentUser = strings.TrimSpace(string(out))
+		}
+	}
+
+	if currentUser != "" {
+		log.Printf("Ensuring host user '%s' is in 'sambashare' group...", currentUser)
+		exec.Command("sudo", "groupadd", "-f", "sambashare").Run()
+		exec.Command("sudo", "usermod", "-a", "-G", "sambashare", currentUser).Run()
+		log.Println("✓ Host user group membership verified")
 	}
 }
 

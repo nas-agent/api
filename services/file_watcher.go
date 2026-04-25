@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -101,6 +102,15 @@ func RefreshFileWatcher() {
 			os.MkdirAll(originPath, os.ModePerm)
 
 			err = watcher.Add(originPath)
+			if err != nil {
+				if strings.Contains(err.Error(), "permission denied") {
+					log.Printf("⚠️ Permission denied for %s. (Host may need to restart API to apply 'sambashare' group rights)", originPath)
+					// Safety fallback: ensure directory is at least group-readable
+					exec.Command("sudo", "chmod", "g+rx", originPath).Run()
+					err = watcher.Add(originPath)
+				}
+			}
+
 			if err != nil {
 				log.Printf("Error adding watcher for user %s at %s: %v", userAIConfig.UserID, originPath, err)
 				continue

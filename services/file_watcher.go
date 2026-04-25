@@ -164,7 +164,21 @@ func watchEventLoop() {
 
 			// Detect file creation, rename, OR write completion
 			if event.Has(fsnotify.Create) || event.Has(fsnotify.Rename) || event.Has(fsnotify.Write) {
-				// Avoid processing temporary or hidden files
+				// 1. Check if the "event" is a new directory
+				fileInfo, err := os.Stat(event.Name)
+				if err == nil && fileInfo.IsDir() {
+					log.Printf("📂 New subfolder detected: %s. Adding to watcher...", event.Name)
+					
+					// Find the userID for this branch
+					parentDir := filepath.Clean(filepath.Dir(event.Name))
+					if userID, exists := watchMap[parentDir]; exists {
+						watcher.Add(event.Name)
+						watchMap[event.Name] = userID
+					}
+					continue // Don't process the folder itself as a file
+				}
+
+				// 2. Avoid processing temporary or hidden files
 				fileName := filepath.Base(event.Name)
 				if strings.HasPrefix(fileName, ".") || strings.HasSuffix(fileName, ".tmp") || strings.HasSuffix(fileName, ".crdownload") {
 					log.Printf("Skipping temporary/hidden file: %s", fileName)
@@ -174,26 +188,26 @@ func watchEventLoop() {
 				// Small delay to ensure file is fully written if it was a large copy
 				time.Sleep(500 * time.Millisecond)
 
-				log.Printf("🚀 Triggering AI Analysis for: %s", event.Name)
-
-				// Check if file still exists (in case it was moved away)
-				if _, err := os.Stat(event.Name); err != nil {
-					log.Printf("File no longer exists or is not accessible: %s (error: %v)", event.Name, err)
-					continue
-				}
-
+				// 3. Find associated User ID
 				dir := filepath.Clean(filepath.Dir(event.Name))
 				userID, exists := watchMap[dir]
+				if !exists {
+					// Fallback: Check if the name itself is the watched dir (rare but happens on some OS)
+					if uid, ok := watchMap[filepath.Clean(event.Name)]; ok {
+						userID = uid
+						exists = true
+					}
+				}
+
 				if !exists {
 					log.Printf("Watched path not found in map: %s", dir)
 					continue
 				}
 
+				log.Printf("🚀 Triggering AI Analysis for: %s (User: %s)", event.Name, userID)
 				var userAIConfig models.UserAIConfig
 				database.DB.Where("user_id = ?", userID).First(&userAIConfig)
-
-				// Tiny delay for large file writes
-				time.Sleep(500 * time.Millisecond)
+				
 				go processNewFile(event.Name, fileName, userID, userAIConfig)
 			}
 

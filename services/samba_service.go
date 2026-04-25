@@ -121,6 +121,9 @@ func (s *SambaService) RemoveSambaUser(username string) error {
 
 // RegisterShare appends a new share section to smb.conf
 func (s *SambaService) RegisterShare(name, path, owner string, isPublic bool) error {
+	// First, remove any existing share with the same name to avoid duplicates
+	_ = s.UnregisterShare(name)
+
 	// Construct the share entry
 	comment := "NAS Agent Managed Share"
 	if isPublic {

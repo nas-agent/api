@@ -25,8 +25,28 @@ func TriggerManualScan(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Unauthorized: No user ID found in token"})
 	}
 
+	// Parse custom path from request body (optional)
+	var req struct {
+		Path string `json:"path"`
+	}
+	c.BodyParser(&req)
+
+	targetPath := ""
+	if req.Path != "" {
+		translator := services.NewPathTranslator()
+		translated, err := translator.TranslatePath(req.Path)
+		if err == nil {
+			targetPath = translated
+		} else {
+			// If it's already a Linux path, TranslatePath handles it,
+			// but if it's a truly local Windows path, we might get an error.
+			// For the API, we'll assume it's either translated or the user sent a Linux path.
+			targetPath = req.Path
+		}
+	}
+
 	// Trigger the scan
-	count, err := services.ScanOrigin(userID)
+	count, err := services.ScanOrigin(userID, targetPath)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error":   "Failed to scan origin path",

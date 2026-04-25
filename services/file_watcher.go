@@ -377,7 +377,7 @@ func detectMimeType(fileName string) string {
 }
 
 // ScanOrigin implements the Three-Phase Batch Processing for In-Place Clustering
-func ScanOrigin(userID string) (int, error) {
+func ScanOrigin(userID string, customPath string) (int, error) {
 	var userAIConfig models.UserAIConfig
 	if err := database.DB.Where("user_id = ?", userID).First(&userAIConfig).Error; err != nil {
 		return 0, fmt.Errorf("user AI configuration not found: %v", err)
@@ -388,8 +388,19 @@ func ScanOrigin(userID string) (int, error) {
 	}
 
 	originPath := filepath.Clean(userAIConfig.OriginPath)
+	
+	// If a custom sub-path is provided, use it instead of the default origin
+	if customPath != "" {
+		// Basic security: if it's not absolute, join it with the base
+		if !strings.HasPrefix(customPath, "/") {
+			originPath = filepath.Join(originPath, customPath)
+		} else {
+			originPath = filepath.Clean(customPath)
+		}
+	}
+
 	if _, err := os.Stat(originPath); os.IsNotExist(err) {
-		return 0, fmt.Errorf("origin path does not exist: %s", originPath)
+		return 0, fmt.Errorf("scan path does not exist: %s", originPath)
 	}
 
 	// 1. GATHER FILES

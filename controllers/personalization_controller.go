@@ -77,25 +77,6 @@ func SubmitPersonalizationFeedback(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to persist feedback"})
 	}
 
-	// NEW: Notify AI Agent of feedback for semantic learning
-	go NotifyAgentOfFeedback(userID, req.FileID, req.Outcome, req.FinalFolder)
-
-	// NEW: Update original AIActionLog status if log_id provided in metadata
-	if logIDRaw, ok := req.Metadata["log_id"]; ok {
-		var logID uint
-		switch v := logIDRaw.(type) {
-		case float64:
-			logID = uint(v)
-		case int:
-			logID = uint(v)
-		case string:
-			fmt.Sscanf(v, "%d", &logID)
-		}
-		if logID > 0 {
-			database.DB.Model(&models.AIActionLog{}).Where("log_id = ? AND user_id = ?", logID, userID).Update("status", req.Outcome)
-		}
-	}
-
 	return c.JSON(fiber.Map{"message": "feedback saved"})
 }
 
@@ -112,31 +93,8 @@ func GetPersonalizationProfile(c *fiber.Ctx) error {
 		// Clean the path to handle potential mixed slashes
 		root = filepath.Clean(userAIConfig.DestinationPath)
 
-		// Attempt to resolve the correct Linux path using the user's DB info
-		if len(root) > 1 && root[1] == ':' {
-			// It's a Windows drive mapping (e.g. Z:\Files)
-			var share models.Share
-			if err := database.DB.Where("owner_id = ? AND type = ?", userID, "Private").First(&share).Error; err == nil && share.Path != "" {
-				// Split into Drive "Z:" and Path "\Files"
-				parts := strings.SplitN(root, ":", 2)
-				if len(parts) == 2 {
-					subPath := strings.ReplaceAll(parts[1], "\\", "/") // explicitly convert backslashes to forward slashes
-					subPath = strings.TrimPrefix(subPath, "/")
-					root = share.Path + "/" + subPath // Build canonical Linux path
-					fmt.Printf("[Path Translator DB] Mapped DestinationPath: %s -> %s\n", userAIConfig.DestinationPath, root)
-				}
-			}
-		} else {
-			// Fallback: translate UNC or normal path
-			if translator := services.NewPathTranslator(); translator != nil {
-				if translated, err := translator.TranslatePath(root); err == nil {
-					root = translated
-				}
-			}
-		}
-
-		// If it's still a Windows-style path (e.g., Z:\Files, C:\Users)
-		// after attempted translation, these are UNC mappings that don't exist on Linux backend
+		// Skip if path is a Windows-style path (e.g., Z:\Files, C:\Users)
+		// These are UNC mappings that don't exist on Linux backend
 		if strings.Contains(root, "\\") || (len(root) > 1 && root[1] == ':') {
 			fmt.Printf("Skipping Windows path %s (UNC mapping on client side only)\n", root)
 		} else if strings.HasPrefix(root, "/") {
@@ -280,16 +238,9 @@ func GetPersonalizationProfile(c *fiber.Ctx) error {
 	last7Rate := ratio(last7Accepted, last7Total)
 	prev7Rate := ratio(prev7Accepted, prev7Total)
 
-	// 5. Get AI Service Config for Agent Discovery
-	aiSvcConfig := config.GetAIServiceConfig()
-
 	return c.JSON(fiber.Map{
 		"folder_profiles": folderViews,
 		"naming_profile":  namingPayload,
-		"ai_config": fiber.Map{
-			"agent_url":     aiSvcConfig.BaseURL,
-			"agent_api_key": aiSvcConfig.APIKey,
-		},
 		"guardrails": fiber.Map{
 			"last_7d_accept_rate":     last7Rate,
 			"previous_7d_accept_rate": prev7Rate,
@@ -377,8 +328,7 @@ func ManualRelocateFeedback(c *fiber.Ctx) error {
 		FileID            uint   `json:"file_id"`
 		SuggestedFolder   string `json:"suggested_folder"`
 		Strategy          string `json:"strategy"` // origin | custom
-		DestinationFolder string         `json:"destination_folder"`
-		Metadata          map[string]any `json:"metadata"`
+		DestinationFolder string `json:"destination_folder"`
 	}
 
 	if err := c.BodyParser(&req); err != nil {
@@ -456,9 +406,6 @@ func ManualRelocateFeedback(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to record learning event"})
 	}
 
-	// NEW: Notify AI Agent of manual correction
-	go NotifyAgentOfFeedback(userID, file.ID, "rejected", finalFolder)
-
 	database.DB.Create(&models.AIActionLog{
 		UserID:      userID,
 		FileID:      file.ID,
@@ -468,24 +415,6 @@ func ManualRelocateFeedback(c *fiber.Ctx) error {
 		Filename:    newName,
 		IsMove:      true,
 	})
-
-	// NEW: Update original AIActionLog status if log_id provided in metadata
-	if req.Metadata != nil {
-		if logIDRaw, ok := req.Metadata["log_id"]; ok {
-			var logID uint
-			switch v := logIDRaw.(type) {
-			case float64:
-				logID = uint(v)
-			case int:
-				logID = uint(v)
-			case string:
-				fmt.Sscanf(v, "%d", &logID)
-			}
-			if logID > 0 {
-				database.DB.Model(&models.AIActionLog{}).Where("log_id = ? AND user_id = ?", logID, userID).Update("status", "rejected")
-			}
-		}
-	}
 
 	return c.JSON(fiber.Map{
 		"message":      "moved",
@@ -498,10 +427,9 @@ func ManualRelocateFeedback(c *fiber.Ctx) error {
 func CaptureManualMoveFeedback(c *fiber.Ctx) error {
 	userID := GetUserID(c)
 	var req struct {
-		FileID          uint           `json:"file_id"`
-		SuggestedFolder string         `json:"suggested_folder"`
-		FinalFileName   string         `json:"final_file_name"`
-		Metadata        map[string]any `json:"metadata"`
+		FileID          uint   `json:"file_id"`
+		SuggestedFolder string `json:"suggested_folder"`
+		FinalFileName   string `json:"final_file_name"`
 	}
 
 	if err := c.BodyParser(&req); err != nil {
@@ -571,26 +499,22 @@ func CaptureManualMoveFeedback(c *fiber.Ctx) error {
 	database.DB.Save(&file)
 
 	finalFolder := filepath.Base(filepath.Dir(newPath))
-	
-	// Notify AI Agent of the capture
-	go NotifyAgentOfFeedback(userID, file.ID, "accepted", finalFolder)
-
-	// NEW: Update original AIActionLog status if log_id provided in metadata
-	if req.Metadata != nil {
-		if logIDRaw, ok := req.Metadata["log_id"]; ok {
-			var logID uint
-			switch v := logIDRaw.(type) {
-			case float64:
-				logID = uint(v)
-			case int:
-				logID = uint(v)
-			case string:
-				fmt.Sscanf(v, "%d", &logID)
-			}
-			if logID > 0 {
-				database.DB.Model(&models.AIActionLog{}).Where("log_id = ? AND user_id = ?", logID, userID).Update("status", "accepted")
-			}
-		}
+	if err := services.RecordDecisionEvent(services.DecisionEventInput{
+		UserID:            userID,
+		FileID:            file.ID,
+		Source:            "manual_capture",
+		Outcome:           "accepted",
+		ReasonCode:        "changed_folder",
+		SuggestedFolder:   req.SuggestedFolder,
+		FinalFolder:       finalFolder,
+		SuggestedFileName: file.FileName,
+		FinalFileName:     file.FileName,
+		ConfidenceScore:   0,
+		Metadata: map[string]any{
+			"captured_path": newPath,
+		},
+	}); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to save captured move"})
 	}
 
 	return c.JSON(fiber.Map{
@@ -759,43 +683,4 @@ func GenerateFolderDescription(c *fiber.Ctx) error {
 	json.NewDecoder(resp.Body).Decode(&result)
 
 	return c.JSON(fiber.Map{"description": result.Description})
-}
-
-// NotifyAgentOfFeedback informs the Python Agent of a user decision for semantic learning
-func NotifyAgentOfFeedback(userID string, fileID uint, outcome string, finalFolder string) {
-	if fileID == 0 || finalFolder == "" {
-		return
-	}
-
-	aiConfig := config.GetAIServiceConfig()
-	payload := map[string]any{
-		"user_id":      userID,
-		"file_id":      fileID,
-		"outcome":      outcome,
-		"final_folder": finalFolder,
-	}
-
-	jsonData, _ := json.Marshal(payload)
-	req, err := http.NewRequest("POST", aiConfig.Endpoint("/api/analyze/feedback"), bytes.NewBuffer(jsonData))
-	if err != nil {
-		log.Printf("[Feedback Bridge] Error creating request: %v", err)
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-API-Key", aiConfig.APIKey)
-
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("[Feedback Bridge] Agent unavailable: %v", err)
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		log.Printf("[Feedback Bridge] Agent error (%d): %s", resp.StatusCode, body)
-	} else {
-		log.Printf("[Feedback Bridge] Successfully reported feedback for file %d to Agent", fileID)
-	}
 }

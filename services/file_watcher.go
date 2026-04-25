@@ -18,7 +18,6 @@ import (
 	"api/models"
 
 	"github.com/fsnotify/fsnotify"
-	"io/fs"
 )
 
 // AITriggerPayload represents the JSON payload sent to the Python AI node
@@ -43,27 +42,6 @@ type AIAnalysisResponse struct {
 	Embedding       []float32           `json:"embedding"`
 	Summary         string              `json:"summary"`
 	Entities        map[string][]string `json:"entities"`
-}
-
-type ClusterRequest struct {
-	UserID          string                `json:"user_id"`
-	Files           []MetadataOnlySummary `json:"files"`
-	ExistingFolders []string              `json:"existing_folders"`
-	FolderProfiles  map[string]string     `json:"folder_profiles"`
-	GeminiAPIKey    string                `json:"gemini_api_key"`
-	GeminiModel     string                `json:"gemini_model"`
-}
-
-type MetadataOnlySummary struct {
-	FileName string              `json:"file_name"`
-	Summary  string              `json:"summary"`
-	Tags     []string            `json:"tags"`
-	Entities map[string][]string `json:"entities"`
-}
-
-type ClusterResponse struct {
-	FolderMap map[string]string `json:"folder_map"`
-	Rationale string            `json:"rationale"`
 }
 
 var (
@@ -106,29 +84,7 @@ func RefreshFileWatcher() {
 		if userAIConfig.OriginPath != "" && userAIConfig.Active {
 			originPath := filepath.Clean(userAIConfig.OriginPath)
 
-			// Attempt to resolve the correct Linux path using the user's DB info
-			if len(originPath) > 1 && originPath[1] == ':' {
-				var share models.Share
-				if err := database.DB.Where("owner_id = ? AND type = ?", userAIConfig.UserID, "Private").First(&share).Error; err == nil && share.Path != "" {
-					parts := strings.SplitN(originPath, ":", 2)
-					if len(parts) == 2 {
-						subPath := strings.ReplaceAll(parts[1], "\\", "/")
-						subPath = strings.TrimPrefix(subPath, "/")
-						mappedPath := share.Path + "/" + subPath
-						log.Printf("[File Watcher DB] Mapped OriginPath: %s -> %s", originPath, mappedPath)
-						originPath = mappedPath
-					}
-				}
-			} else {
-				// Fallback to legacy translation
-				if translator := NewPathTranslator(); translator != nil {
-					if translated, err := translator.TranslatePath(originPath); err == nil {
-						originPath = translated
-					}
-				}
-			}
-
-			// Skip Windows-style paths (UNC mappings on client side only) if translation failed
+			// Skip Windows-style paths (UNC mappings on client side only)
 			if strings.Contains(originPath, "\\") || (len(originPath) > 1 && originPath[1] == ':') {
 				log.Printf("Skipping Windows path for user %s: %s (UNC mapping on client side only)", userAIConfig.UserID, originPath)
 				continue
@@ -209,7 +165,7 @@ func watchEventLoop() {
 
 				// Tiny delay for large file writes
 				time.Sleep(500 * time.Millisecond)
-				go ProcessNewFile(event.Name, fileName, userID, userAIConfig, false)
+				go processNewFile(event.Name, fileName, userID, userAIConfig)
 			}
 
 		case err, ok := <-watcher.Errors:
@@ -239,43 +195,31 @@ func eventTypeString(op fsnotify.Op) string {
 	}
 }
 
-func waitForFileStability(path string) error {
-	var lastSize int64 = -1
-	// Increased patience: 25 samples over 5 seconds total
-	for i := 0; i < 25; i++ {
-		fi, err := os.Stat(path)
-		if err != nil {
-			return err
-		}
-		currentSize := fi.Size()
-		// Only consider stable if size is constant and non-zero
-		if currentSize == lastSize && currentSize > 0 {
-			// Final cool-off: Wait another 800ms to ensure buffers are fully flushed
-			time.Sleep(800 * time.Millisecond)
-			fi2, _ := os.Stat(path)
-			if fi2 != nil && fi2.Size() == currentSize {
-				// Try to open it to ensure it's not locked
-				f, err := os.Open(path)
-				if err == nil {
-					f.Close()
-					return nil
-				}
-			}
-		}
-		lastSize = currentSize
-		time.Sleep(200 * time.Millisecond)
-	}
-	return fmt.Errorf("file size is still changing or empty after timeout")
+// MetadataOnlySummary represents a condensed file analysis for batch clustering
+type MetadataOnlySummary struct {
+	FileName string              `json:"file_name"`
+	Summary  string              `json:"summary"`
+	Tags     []string            `json:"tags"`
+	Entities map[string][]string `json:"entities"`
 }
 
-func ProcessNewFile(sourcePath, fileName string, userID string, userAIConfig models.UserAIConfig, skipStability bool) {
-	// Ensure file is stable before reading (skip if manual scan)
-	if !skipStability {
-		if err := waitForFileStability(sourcePath); err != nil {
-			log.Printf("Warning: File %s might be incomplete: %v", fileName, err)
-		}
-	}
+// ClusterRequest is the payload sent to the AI Agent for batch grouping
+type ClusterRequest struct {
+	UserID          string                `json:"user_id"`
+	Files           []MetadataOnlySummary `json:"files"`
+	ExistingFolders []string              `json:"existing_folders"`
+	FolderProfiles  map[string]string     `json:"folder_profiles"`
+	GeminiAPIKey    string                `json:"gemini_api_key"`
+	GeminiModel     string                `json:"gemini_model"`
+}
 
+// ClusterResponse is the "Master Plan" returned by the AI Agent
+type ClusterResponse struct {
+	FolderMap map[string]string `json:"folder_map"`
+	Rationale string            `json:"rationale"`
+}
+
+func processNewFile(sourcePath, fileName string, userID string, userAIConfig models.UserAIConfig) {
 	// Create Initial Metadata (Pending AI Analysis)
 	fileInfo, _ := os.Stat(sourcePath)
 	size := int64(0)
@@ -284,7 +228,7 @@ func ProcessNewFile(sourcePath, fileName string, userID string, userAIConfig mod
 	}
 
 	metadata := models.FileMetadata{
-		NASPath:       sourcePath,
+		NASPath:       sourcePath, // Temporarily point to the origin path
 		FileName:      fileName,
 		FileType:      filepath.Ext(fileName),
 		FileSizeBytes: size,
@@ -292,89 +236,26 @@ func ProcessNewFile(sourcePath, fileName string, userID string, userAIConfig mod
 		LastAccessed:  time.Now().Unix(),
 	}
 
-	// Use Upsert (FirstOrCreate with Assign) to handle UNIQUE constraint on NASPath
-	// This prevents the "UNIQUE constraint failed" error if a file is re-added
-	if err := database.DB.Where(models.FileMetadata{NASPath: sourcePath}).
-		Assign(models.FileMetadata{
-			FileName:      fileName,
-			FileType:      filepath.Ext(fileName),
-			FileSizeBytes: size,
-			LastAccessed:  time.Now().Unix(),
-		}).
-		FirstOrCreate(&metadata).Error; err != nil {
-		log.Printf("[File Watcher] ERROR saving metadata for %s: %v. Aborting AI analysis.", fileName, err)
-		return
-	}
+	database.DB.Create(&metadata)
+	log.Printf("Saved initial metadata for: %s (ID: %d)", fileName, metadata.ID)
 
-	if metadata.ID == 0 {
-		log.Printf("[File Watcher] ERROR: Metadata ID is 0 for %s. Aborting AI analysis.", fileName)
-		return
-	}
-
-	log.Printf("[File Watcher] Metadata ready for: %s (ID: %d)", fileName, metadata.ID)
-
-	// Scan Existing Folders
-	existingFolders := []string{}
-	if userAIConfig.DestinationPath != "" {
-		destPath := filepath.Clean(userAIConfig.DestinationPath)
-
-		// Skip Windows-style paths
-		if strings.Contains(destPath, "\\") || (len(destPath) > 1 && destPath[1] == ':') {
-			log.Printf("Warning: Destination path is Windows format (UNC mapping): %s", destPath)
-		} else if strings.HasPrefix(destPath, "/") {
-			// Only process Linux-style absolute paths
-			var scanFolders func(path string, currentDepth, maxDepth int)
-			scanFolders = func(path string, currentDepth, maxDepth int) {
-				if currentDepth > maxDepth {
-					return
-				}
-				entries, err := os.ReadDir(path)
-				if err != nil {
-					log.Printf("Warning: Failed to scan directory %s: %v", path, err)
-					return
-				}
-				for _, entry := range entries {
-					if entry.IsDir() {
-						if strings.HasPrefix(entry.Name(), ".") {
-							continue // skip hidden folders
-						}
-						fullPath := filepath.Join(path, entry.Name())
-						relPath, _ := filepath.Rel(destPath, fullPath)
-						relPath = filepath.ToSlash(relPath) // Ensure standardized paths
-						existingFolders = append(existingFolders, relPath)
-						scanFolders(fullPath, currentDepth+1, maxDepth)
-					}
-				}
-			}
-			scanFolders(destPath, 1, 2)
-		}
-	}
-
-	// Fetch Folder Descriptions for context
-	folderProfiles := make(map[string]string)
-	var dbProfiles []models.UserFolderProfile
-	database.DB.Where("user_id = ?", userID).Find(&dbProfiles)
-	for _, p := range dbProfiles {
-		if strings.TrimSpace(p.Description) != "" {
-			folderProfiles[p.FolderName] = p.Description
-		}
-	}
+	// Scan Existing Folders for context
+	existingFolders := listExistingFolders(userID, userAIConfig)
+	folderProfiles := getFolderProfiles(userID)
 
 	// Trigger Python & Wait for Response (With Concurrency Control)
-	// This prevents crashing the local Python GPU by blasting it with 50 simultaneous files
 	startTime := time.Now()
-	log.Printf("Queueing %s for AI analysis...", fileName)
 	aiSemaphore <- struct{}{}
 	aiResp, err := triggerAIAnalysis(metadata.ID, sourcePath, fileName, userID, existingFolders, folderProfiles, userAIConfig)
 	<-aiSemaphore
-	duration := time.Since(startTime)
+	
 	if err != nil {
 		log.Printf("AI Analysis failed for %s: %v. File will remain in origin.", fileName, err)
 		return
 	}
-	log.Printf("!!! TOTAL AI TURNAROUND TIME for %s: %v !!!", fileName, duration)
+	log.Printf("!!! TOTAL AI TURNAROUND TIME for %s: %v !!!", fileName, time.Since(startTime))
 
-	personalizedFolder, folderProfileScore := SuggestFolderForFile(
+	personalizedFolder, _ := SuggestFolderForFile(
 		userID,
 		aiResp.SuggestedFolder,
 		existingFolders,
@@ -387,18 +268,6 @@ func ProcessNewFile(sourcePath, fileName string, userID string, userAIConfig mod
 		selectedFolder = personalizedFolder
 	}
 
-	// OVERRIDE UNRELIABLE CONFIDENCE: LLMs are terrible at self-evaluating confidence.
-	// We blend the LLM's guess with our robust mathematical Personalization Score.
-	mathConfidence := folderProfileScore * 100.0
-	if mathConfidence > 0 {
-		aiResp.ConfidenceScore = int((mathConfidence * 0.75) + (float64(aiResp.ConfidenceScore) * 0.25))
-	}
-
-	suggestedFileName := fileName
-	if userAIConfig.RenameFile {
-		suggestedFileName = SuggestPersonalizedFileName(userID, fileName, aiResp.Tags, userAIConfig.RenameFormat)
-	}
-
 	// Save the summary generated by AI
 	metadata.Summary = aiResp.Summary
 	if entitiesBytes, err := json.Marshal(aiResp.Entities); err == nil {
@@ -407,100 +276,14 @@ func ProcessNewFile(sourcePath, fileName string, userID string, userAIConfig mod
 	database.DB.Save(&metadata)
 
 	// Move the file based on AI suggestion and confidence thresholds
-	finalPath := sourcePath
-
-	// Convert thresholds to scale of 0-100 for comparison with AI response
-	autoThreshold := userAIConfig.ConfidenceAuto
-	rejectThreshold := userAIConfig.ConfidenceReject
-
-	// If the DB stores them as 0.0-1.0, and AI returns 0-100, normalize autoThreshold and rejectThreshold
-	if autoThreshold <= 1.0 && aiResp.ConfidenceScore > 1 {
-		autoThreshold *= 100
-	}
-	if rejectThreshold <= 1.0 && aiResp.ConfidenceScore > 1 {
-		rejectThreshold *= 100
-	}
-
-	log.Printf("Analyzing movement for %s: Confidence=%d, Auto=%f, Reject=%f",
-		fileName, aiResp.ConfidenceScore, autoThreshold, rejectThreshold)
-
-	// Prepare Log Entry (Always log what AI thought)
-	logEntry := models.AIActionLog{
-		UserID:   userID,
-		FileID:   metadata.ID,
-		Filename: fileName,
-		Folder:   selectedFolder,
-	}
-
-	if float64(aiResp.ConfidenceScore) <= rejectThreshold {
-		log.Printf("Confidence too low (%d <= %f). File will remain in origin.", aiResp.ConfidenceScore, rejectThreshold)
-		logEntry.Action = "reject"
-		logEntry.Description = fmt.Sprintf("Rejected (Low Confidence: %d%%)", aiResp.ConfidenceScore)
-		logEntry.IsMove = false
-		database.DB.Create(&logEntry)
-		_ = RecordDecisionEvent(DecisionEventInput{
-			UserID:            userID,
-			FileID:            metadata.ID,
-			Source:            "watcher",
-			Outcome:           "rejected",
-			ReasonCode:        "low_confidence",
-			SuggestedFolder:   aiResp.SuggestedFolder,
-			FinalFolder:       "",
-			SuggestedFileName: suggestedFileName,
-			FinalFileName:     fileName,
-			ConfidenceScore:   aiResp.ConfidenceScore,
-			Metadata: map[string]any{
-				"profile_folder_score": folderProfileScore,
-				"analysis_provider":    userAIConfig.AnalysisProvider,
-			},
-		})
-		return
-	}
-
 	if userAIConfig.DestinationPath != "" && userAIConfig.AutoSelectFolder {
 		destPath := filepath.Clean(userAIConfig.DestinationPath)
-
-		// Skip file move if destination is Windows-style path
-		if strings.Contains(destPath, "\\") || (len(destPath) > 1 && destPath[1] == ':') {
-			logEntry.Action = "skip_move"
-			logEntry.Description = fmt.Sprintf("Skipped: Destination path is Windows format (UNC mapping)")
-			logEntry.IsMove = false
-			database.DB.Create(&logEntry)
-			log.Printf("Skipping file move - destination is Windows path: %s", destPath)
-			_ = RecordDecisionEvent(DecisionEventInput{
-				UserID:            userID,
-				FileID:            metadata.ID,
-				Source:            "watcher",
-				Outcome:           "skipped",
-				ReasonCode:        "windows_path",
-				SuggestedFolder:   aiResp.SuggestedFolder,
-				FinalFolder:       "",
-				SuggestedFileName: suggestedFileName,
-				FinalFileName:     fileName,
-				ConfidenceScore:   aiResp.ConfidenceScore,
-			})
-			return
-		}
-
-		// Only proceed with move if destination is valid Linux path
-		if !strings.HasPrefix(destPath, "/") {
-			logEntry.Action = "skip_move"
-			logEntry.Description = "Skipped: Invalid destination path (not absolute)"
-			logEntry.IsMove = false
-			database.DB.Create(&logEntry)
-			log.Printf("Skipping file move - invalid destination path: %s", destPath)
-			return
-		}
 
 		// Proceed with move
 		targetDir := filepath.Join(destPath, selectedFolder)
 		os.MkdirAll(targetDir, os.ModePerm)
 
 		destFileName := fileName
-		if userAIConfig.RenameFile {
-			destFileName = EnsureUniqueName(targetDir, suggestedFileName)
-		}
-
 		finalDestPath := filepath.Join(targetDir, destFileName)
 
 		err := copyFile(sourcePath, finalDestPath)
@@ -510,99 +293,13 @@ func ProcessNewFile(sourcePath, fileName string, userID string, userAIConfig mod
 		}
 
 		os.Remove(sourcePath)
-		finalPath = finalDestPath
-		log.Printf("Categorized and moved file to: %s (Confidence: %d)", finalPath, aiResp.ConfidenceScore)
-
-		// Fetch User Settings to check if notifications are enabled
-		var userSettings models.UserSetting
-		database.DB.Where("user_id = ?", userID).First(&userSettings)
-
-		// TRIGGER NOTIFICATION if user settings allow it
-		if userSettings.AINotifications {
-			log.Printf("Triggering SSE Notification for file: %s", fileName)
-			NotifyFileMoved(fileName, aiResp.SuggestedFolder)
-		}
-
-		logEntry.Action = "move_file"
-		logEntry.Description = fmt.Sprintf("Auto-organized into '%s' (Confidence: %d%%)", selectedFolder, aiResp.ConfidenceScore)
-		logEntry.IsMove = true
-		database.DB.Create(&logEntry)
-
+		
 		// Update Metadata with final path
-		metadata.NASPath = finalPath
-		metadata.FileName = destFileName
+		metadata.NASPath = finalDestPath
 		database.DB.Save(&metadata)
 
-		_ = RecordDecisionEvent(DecisionEventInput{
-			UserID:            userID,
-			FileID:            metadata.ID,
-			Source:            "watcher",
-			Outcome:           "auto_moved",
-			ReasonCode:        "system_auto",
-			SuggestedFolder:   aiResp.SuggestedFolder,
-			FinalFolder:       selectedFolder,
-			SuggestedFileName: suggestedFileName,
-			FinalFileName:     destFileName,
-			ConfidenceScore:   aiResp.ConfidenceScore,
-			Metadata: map[string]any{
-				"profile_folder_score": folderProfileScore,
-				"analysis_provider":    userAIConfig.AnalysisProvider,
-				"rename_enabled":       userAIConfig.RenameFile,
-			},
-		})
-	} else {
-		// Just log the suggestion without moving
-		log.Printf("Auto-move disabled or no destination. Logging suggestion only.")
-
-		var userSettings models.UserSetting
-		database.DB.Where("user_id = ?", userID).First(&userSettings)
-		if userSettings.AINotifications {
-			NotifyApprovalNeeded(fileName, selectedFolder)
-		}
-
-		logEntry.Action = "suggestion"
-		logEntry.Description = fmt.Sprintf("Suggested '%s' (Manual Mode)", selectedFolder)
-		logEntry.IsMove = false
-		database.DB.Create(&logEntry)
-		_ = RecordDecisionEvent(DecisionEventInput{
-			UserID:            userID,
-			FileID:            metadata.ID,
-			Source:            "watcher",
-			Outcome:           "suggested",
-			ReasonCode:        "manual_review",
-			SuggestedFolder:   aiResp.SuggestedFolder,
-			FinalFolder:       selectedFolder,
-			SuggestedFileName: suggestedFileName,
-			FinalFileName:     fileName,
-			ConfidenceScore:   aiResp.ConfidenceScore,
-			Metadata: map[string]any{
-				"profile_folder_score": folderProfileScore,
-				"analysis_provider":    userAIConfig.AnalysisProvider,
-			},
-		})
-	}
-
-	// Create Tags in DB (Always save tags even if not moved)
-	for _, tagStr := range aiResp.Tags {
-		tag := models.FileTag{
-			FileID:  metadata.ID,
-			TagName: tagStr,
-		}
-		database.DB.Create(&tag)
-	}
-	// Save Embedding Vector
-	if len(aiResp.Embedding) > 0 {
-		vectorBytes, err := json.Marshal(aiResp.Embedding)
-		if err == nil {
-			embeddingDoc := models.FileEmbedding{
-				FileID:          metadata.ID,
-				EmbeddingVector: string(vectorBytes),
-			}
-			database.DB.Create(&embeddingDoc)
-			log.Printf("Saved vector embedding for %s (%d dims)", fileName, len(aiResp.Embedding))
-		} else {
-			log.Printf("Failed to marshal embeddings for %s: %v", fileName, err)
-		}
+		log.Printf("Categorized and moved file to: %s", finalDestPath)
+		NotifyFileMoved(fileName, selectedFolder)
 	}
 }
 
@@ -624,18 +321,13 @@ func triggerAIAnalysis(fileID uint, filePath string, fileName string, userID str
 		GeminiModel:      userAIConfig.GeminiModel,
 	}
 
-	// Always send file content for off-load streaming architecture (if file is reasonably sized)
-	fileInfo, err := os.Stat(filePath)
-	if err == nil && fileInfo.Size() < 25*1024*1024 { // 25MB limit for streaming
+	if provider == "gemini" {
 		fileBytes, err := os.ReadFile(filePath)
-		if err == nil {
-			payload.FileContentBase64 = base64.StdEncoding.EncodeToString(fileBytes)
-			payload.MimeType = detectMimeType(fileName)
-		} else {
-			log.Printf("Warning: Failed to read file for streaming: %v", err)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read file for Gemini payload: %v", err)
 		}
-	} else if err == nil {
-		log.Printf("File %s is too large for streaming (%d bytes). Sending metadata only.", fileName, fileInfo.Size())
+		payload.FileContentBase64 = base64.StdEncoding.EncodeToString(fileBytes)
+		payload.MimeType = detectMimeType(fileName)
 	}
 
 	jsonData, _ := json.Marshal(payload)
@@ -666,7 +358,6 @@ func triggerAIAnalysis(fileID uint, filePath string, fileName string, userID str
 		return nil, fmt.Errorf("failed to decode AI JSON response: %v", err)
 	}
 
-	log.Printf("AI analysis logic complete for %s. Suggested folder: %s", fileName, aiResponse.SuggestedFolder)
 	return &aiResponse, nil
 }
 
@@ -676,28 +367,183 @@ func detectMimeType(fileName string) string {
 		return "image/jpeg"
 	case ".png":
 		return "image/png"
-	case ".gif":
-		return "image/gif"
-	case ".webp":
-		return "image/webp"
-	case ".bmp":
-		return "image/bmp"
 	case ".pdf":
 		return "application/pdf"
-	case ".txt":
-		return "text/plain"
-	case ".md":
-		return "text/markdown"
-	case ".csv":
-		return "text/csv"
 	case ".docx":
 		return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-	case ".pptx":
-		return "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-	case ".xlsx":
-		return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 	default:
 		return "application/octet-stream"
+	}
+}
+
+// ScanOrigin implements the Three-Phase Batch Processing for In-Place Clustering
+func ScanOrigin(userID string) (int, error) {
+	var userAIConfig models.UserAIConfig
+	if err := database.DB.Where("user_id = ?", userID).First(&userAIConfig).Error; err != nil {
+		return 0, fmt.Errorf("user AI configuration not found: %v", err)
+	}
+
+	if userAIConfig.OriginPath == "" {
+		return 0, fmt.Errorf("origin path not configured for user")
+	}
+
+	originPath := filepath.Clean(userAIConfig.OriginPath)
+	if _, err := os.Stat(originPath); os.IsNotExist(err) {
+		return 0, fmt.Errorf("origin path does not exist: %s", originPath)
+	}
+
+	// 1. GATHER FILES
+	entries, err := os.ReadDir(originPath)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read origin directory: %v", err)
+	}
+
+	var filesToProcess []struct{ Path, Name string }
+	for _, entry := range entries {
+		if entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+		filesToProcess = append(filesToProcess, struct{ Path, Name string }{
+			filepath.Join(originPath, entry.Name()), entry.Name(),
+		})
+	}
+
+	if len(filesToProcess) == 0 {
+		return 0, nil
+	}
+
+	// 2. PHASE 1: PERCEPTION (Gather Summaries)
+	log.Printf("[Batch Scan] Starting Phase 1: Analyzing %d files...", len(filesToProcess))
+	var summaries []MetadataOnlySummary
+	existingFolders := listExistingFolders(userID, userAIConfig)
+	folderProfiles := getFolderProfiles(userID)
+
+	for _, f := range filesToProcess {
+		// Temporary metadata for AI context
+		meta := models.FileMetadata{OwnerID: userID, FileName: f.Name, NASPath: f.Path}
+		database.DB.Create(&meta)
+
+		aiResp, err := triggerAIAnalysis(meta.ID, f.Path, f.Name, userID, existingFolders, folderProfiles, userAIConfig)
+		if err == nil {
+			summaries = append(summaries, MetadataOnlySummary{
+				FileName: f.Name,
+				Summary:  aiResp.Summary,
+				Tags:     aiResp.Tags,
+				Entities: aiResp.Entities,
+			})
+			// Save summary to DB
+			meta.Summary = aiResp.Summary
+			database.DB.Save(&meta)
+		}
+		time.Sleep(100 * time.Millisecond) // Don't overwhelm agent
+	}
+
+	// 3. PHASE 2: GLOBAL DECISION (Clustering)
+	log.Printf("[Batch Scan] Starting Phase 2: Requesting master plan...")
+	clusterResp, err := triggerBatchClustering(userID, summaries, existingFolders, folderProfiles, userAIConfig)
+	if err != nil {
+		return 0, fmt.Errorf("batch clustering failed: %v", err)
+	}
+
+	// 4. PHASE 3: IN-PLACE MIGRATION
+	log.Printf("[Batch Scan] Starting Phase 3: Executing in-place moves...")
+	filesMoved := 0
+	for _, f := range filesToProcess {
+		targetSubfolder := clusterResp.FolderMap[f.Name]
+		if targetSubfolder == "" {
+			continue
+		}
+		
+		// Move files IN-PLACE (into subfolders of originPath)
+		ExecuteInPlaceMove(f.Path, f.Name, targetSubfolder, originPath, userID)
+		filesMoved++
+	}
+
+	return filesMoved, nil
+}
+
+func listExistingFolders(userID string, config models.UserAIConfig) []string {
+	folders := []string{}
+	if config.DestinationPath == "" {
+		return folders
+	}
+	dest := filepath.Clean(config.DestinationPath)
+	entries, _ := os.ReadDir(dest)
+	for _, e := range entries {
+		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+			folders = append(folders, e.Name())
+		}
+	}
+	return folders
+}
+
+func getFolderProfiles(userID string) map[string]string {
+	profiles := make(map[string]string)
+	var dbProfiles []models.UserFolderProfile
+	database.DB.Where("user_id = ?", userID).Find(&dbProfiles)
+	for _, p := range dbProfiles {
+		profiles[p.FolderName] = p.Description
+	}
+	return profiles
+}
+
+func triggerBatchClustering(userID string, summaries []MetadataOnlySummary, existing []string, profiles map[string]string, userAIConfig models.UserAIConfig) (*ClusterResponse, error) {
+	payload := ClusterRequest{
+		UserID:          userID,
+		Files:           summaries,
+		ExistingFolders: existing,
+		FolderProfiles:  profiles,
+		GeminiAPIKey:    userAIConfig.GeminiAPIKey,
+		GeminiModel:     userAIConfig.GeminiModel,
+	}
+
+	jsonData, _ := json.Marshal(payload)
+	aiConfig := config.GetAIServiceConfig()
+	endpoint := aiConfig.Endpoint("/api/analyze/cluster")
+
+	req, err := http.NewRequest("POST", endpoint, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", aiConfig.APIKey)
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("AI agent returned %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	var clusterResp ClusterResponse
+	if err := json.NewDecoder(resp.Body).Decode(&clusterResp); err != nil {
+		return nil, err
+	}
+	return &clusterResp, nil
+}
+
+func ExecuteInPlaceMove(sourcePath, fileName, targetFolder, originPath, userID string) {
+	// Create subfolder directly in originPath
+	targetDir := filepath.Join(originPath, targetFolder)
+	os.MkdirAll(targetDir, os.ModePerm)
+
+	destPath := filepath.Join(targetDir, fileName)
+	
+	err := copyFile(sourcePath, destPath)
+	if err == nil {
+		os.Remove(sourcePath)
+		// Update DB metadata with new in-place location
+		var meta models.FileMetadata
+		if err := database.DB.Where("nas_path = ? AND owner_id = ?", sourcePath, userID).First(&meta).Error; err == nil {
+			meta.NASPath = destPath
+			database.DB.Save(&meta)
+		}
+		log.Printf("[Cleaner] Organized %s -> %s", fileName, targetFolder)
 	}
 }
 
@@ -718,184 +564,4 @@ func copyFile(src, dst string) error {
 	return err
 }
 
-// ScanOrigin walks through the origin path and organizes files using Three-Phase Batch Processing.
-func ScanOrigin(userID string) (int, error) {
-	var userAIConfig models.UserAIConfig
-	if err := database.DB.Where("user_id = ?", userID).First(&userAIConfig).Error; err != nil {
-		return 0, fmt.Errorf("AI configuration not found for user %s", userID)
-	}
 
-	originPath := userAIConfig.OriginPath
-	if originPath == "" {
-		return 0, fmt.Errorf("origin path not configured for user %s", userID)
-	}
-
-	originPath = filepath.Clean(originPath)
-	if strings.Contains(originPath, "\\") || (len(originPath) > 1 && originPath[1] == ':') {
-		return 0, fmt.Errorf("invalid Linux path: %s", originPath)
-	}
-
-	if _, err := os.Stat(originPath); os.IsNotExist(err) {
-		return 0, fmt.Errorf("origin path does not exist: %s", originPath)
-	}
-
-	// 1. GATHER FILES
-	var filesToProcess []struct{ Path, Name string }
-	_ = filepath.WalkDir(originPath, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return nil
-		}
-		if strings.HasPrefix(d.Name(), ".") || strings.HasSuffix(d.Name(), ".tmp") {
-			return nil
-		}
-		filesToProcess = append(filesToProcess, struct{ Path, Name string }{p, d.Name()})
-		return nil
-	})
-
-	if len(filesToProcess) == 0 {
-		return 0, nil
-	}
-
-	// 2. PHASE 1: PERCEPTION (Gathering Summaries)
-	log.Printf("[Batch Scan] Starting Phase 1: Analyzing %d files...", len(filesToProcess))
-	var summaries []MetadataOnlySummary
-	existingFolders := listExistingFolders(userID, userAIConfig)
-	folderProfiles := getFolderProfiles(userID)
-
-	for _, f := range filesToProcess {
-		// Mock metadata for tracking
-		meta := models.FileMetadata{OwnerID: userID, FileName: f.Name, NASPath: f.Path, Status: "batch_analyzing"}
-		database.DB.Create(&meta)
-
-		aiResp, _, err := AnalyzeFileOnly(f.Path, f.Name, userID, existingFolders, folderProfiles, userAIConfig, &meta)
-		if err == nil {
-			summaries = append(summaries, MetadataOnlySummary{
-				FileName: f.Name,
-				Summary:  aiResp.Summary,
-				Tags:     aiResp.Tags,
-				Entities: aiResp.Entities,
-			})
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	// 3. PHASE 2: GLOBAL DECISION (Clustering)
-	log.Printf("[Batch Scan] Starting Phase 2: Designing master plan...")
-	clusterResp, err := triggerBatchClustering(userID, summaries, existingFolders, folderProfiles, userAIConfig)
-	if err != nil {
-		return 0, err
-	}
-
-	// 4. PHASE 3: EXECUTION (Migration)
-	log.Printf("[Batch Scan] Starting Phase 3: Moving files...")
-	filesMoved := 0
-	for _, f := range filesToProcess {
-		targetFolder := clusterResp.FolderMap[f.Name]
-		if targetFolder == "" {
-			continue
-		}
-		var meta models.FileMetadata
-		if err := database.DB.Where("owner_id = ? AND nas_path = ?", userID, f.Path).Order("id desc").First(&meta).Error; err == nil {
-			ExecuteFileMove(f.Path, f.Name, targetFolder, userID, userAIConfig, &meta)
-			filesMoved++
-		}
-	}
-
-	return filesMoved, nil
-}
-
-func listExistingFolders(userID string, userAIConfig models.UserAIConfig) []string {
-	existingFolders := []string{}
-	destPath := filepath.Clean(userAIConfig.DestinationPath)
-	if destPath != "" && strings.HasPrefix(destPath, "/") {
-		var scanFolders func(path string, currentDepth, maxDepth int)
-		scanFolders = func(path string, currentDepth, maxDepth int) {
-			if currentDepth > maxDepth {
-				return
-			}
-			entries, _ := os.ReadDir(path)
-			for _, entry := range entries {
-				if entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") {
-					fullPath := filepath.Join(path, entry.Name())
-					relPath, _ := filepath.Rel(destPath, fullPath)
-					existingFolders = append(existingFolders, filepath.ToSlash(relPath))
-					scanFolders(fullPath, currentDepth+1, maxDepth)
-				}
-			}
-		}
-		scanFolders(destPath, 1, 2)
-	}
-	return existingFolders
-}
-
-func getFolderProfiles(userID string) map[string]string {
-	folderProfiles := make(map[string]string)
-	var dbProfiles []models.UserFolderProfile
-	database.DB.Where("user_id = ?", userID).Find(&dbProfiles)
-	for _, p := range dbProfiles {
-		folderProfiles[p.FolderName] = p.Description
-	}
-	return folderProfiles
-}
-
-func triggerBatchClustering(userID string, files []MetadataOnlySummary, existing []string, profiles map[string]string, cfg models.UserAIConfig) (*ClusterResponse, error) {
-	aiConfig := config.GetAIServiceConfig()
-	payload := ClusterRequest{
-		UserID:          userID,
-		Files:           files,
-		ExistingFolders: existing,
-		FolderProfiles:  profiles,
-		GeminiAPIKey:    cfg.GeminiAPIKey,
-		GeminiModel:     cfg.GeminiModel,
-	}
-
-	jsonData, _ := json.Marshal(payload)
-	req, _ := http.NewRequest("POST", aiConfig.Endpoint("/api/analyze/cluster"), bytes.NewBuffer(jsonData))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-API-Key", aiConfig.APIKey)
-
-	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	var clusterResp ClusterResponse
-	_ = json.NewDecoder(resp.Body).Decode(&clusterResp)
-	return &clusterResp, nil
-}
-
-func AnalyzeFileOnly(sourcePath, fileName, userID string, existingFolders []string, folderProfiles map[string]string, userAIConfig models.UserAIConfig, metadata *models.FileMetadata) (*AIAnalysisResponse, float64, error) {
-	aiSemaphore <- struct{}{}
-	aiResp, err := triggerAIAnalysis(metadata.ID, sourcePath, fileName, userID, existingFolders, folderProfiles, userAIConfig)
-	<-aiSemaphore
-	if err != nil {
-		return nil, 0, err
-	}
-
-	metadata.Summary = aiResp.Summary
-	if entBytes, err := json.Marshal(aiResp.Entities); err == nil {
-		metadata.Entities = string(entBytes)
-	}
-	database.DB.Save(metadata)
-
-	for _, t := range aiResp.Tags {
-		database.DB.Create(&models.FileTag{FileID: metadata.ID, TagName: t})
-	}
-	return aiResp, 0, nil
-}
-
-func ExecuteFileMove(sourcePath, fileName, selectedFolder, userID string, userAIConfig models.UserAIConfig, metadata *models.FileMetadata) {
-	destPath := filepath.Clean(userAIConfig.DestinationPath)
-	targetDir := filepath.Join(destPath, selectedFolder)
-	os.MkdirAll(targetDir, os.ModePerm)
-
-	finalDestPath := filepath.Join(targetDir, fileName) // Keeping it simple for batch
-	if err := copyFile(sourcePath, finalDestPath); err == nil {
-		os.Remove(sourcePath)
-		metadata.NASPath = finalDestPath
-		metadata.Status = "completed"
-		database.DB.Save(metadata)
-	}
-}

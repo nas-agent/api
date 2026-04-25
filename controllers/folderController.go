@@ -13,9 +13,9 @@ import (
 )
 
 type FolderItem struct {
-	Name       string `json:"name"`
-	Path       string `json:"path"`
-	IsDir      bool   `json:"is_dir"`
+	Name       string       `json:"name"`
+	Path       string       `json:"path"`
+	IsDir      bool         `json:"is_dir"`
 	Subfolders []FolderItem `json:"subfolders,omitempty"`
 }
 

@@ -1,14 +1,10 @@
 package controllers
 
 import (
-	"api/database"
-	"api/models"
 	"api/services"
 	"log"
-	"strings"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/golang-jwt/jwt/v5"
 )
 
 // GetSMBConfig returns SMB configuration for frontend path mapping
@@ -42,43 +38,20 @@ func TranslatePath(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
 	}
 
-	userID := ""
-	if raw := c.Locals("user_id"); raw != nil {
-		userID = raw.(string)
-	} else if rawUser := c.Locals("user"); rawUser != nil {
-		if token, ok := rawUser.(*jwt.Token); ok {
-			if claims, ok := token.Claims.(jwt.MapClaims); ok {
-				if id, ok := claims["user_id"].(string); ok {
-					userID = id
-				}
-			}
-		}
-	}
-
-	translatedPath := req.Path
-	if len(req.Path) > 1 && req.Path[1] == ':' && userID != "" {
-		var share models.Share
-		if err := database.DB.Where("owner_id = ? AND type = ?", userID, "Private").First(&share).Error; err == nil && share.Path != "" {
-			parts := strings.SplitN(req.Path, ":", 2)
-			if len(parts) == 2 {
-				subPath := strings.ReplaceAll(parts[1], "\\", "/")
-				subPath = strings.TrimPrefix(subPath, "/")
-				translatedPath = share.Path + "/" + subPath
-				log.Printf("[Path Translator DB] Mapped Path: %s -> %s", req.Path, translatedPath)
-			}
-		}
-	} else {
-		translator := services.NewPathTranslator()
-		if p, err := translator.TranslatePath(req.Path); err == nil {
-			translatedPath = p
-		}
-	}
+	translator := services.NewPathTranslator()
+	translatedPath, err := translator.TranslatePath(req.Path)
 
 	resp := TranslatePathResponse{
-		OriginalPath:   req.Path,
-		TranslatedPath: translatedPath,
+		OriginalPath: req.Path,
 	}
 
+	if err != nil {
+		log.Printf("Path translation error for '%s': %v", req.Path, err)
+		resp.Error = err.Error()
+		return c.Status(400).JSON(resp)
+	}
+
+	resp.TranslatedPath = translatedPath
 	log.Printf("Translated path: %s -> %s", req.Path, translatedPath)
 
 	return c.JSON(resp)

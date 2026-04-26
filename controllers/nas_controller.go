@@ -322,6 +322,30 @@ func isSystemDisk(device string) bool {
 	return false
 }
 
+// removeFromFstab removes any entries from /etc/fstab that match the given target (UUID or mount point)
+func removeFromFstab(target string) error {
+	if target == "" {
+		return nil
+	}
+
+	log.Printf("[NAS] Removing entry from /etc/fstab for: %s\n", target)
+
+	// Escape slash for sed
+	escapedTarget := strings.ReplaceAll(target, "/", "\\/")
+
+	// We use sed to delete any line containing the target string
+	// This is simple and effective for cleaning up fstab
+	sedCmd := fmt.Sprintf("sudo sed -i '/%s/d' /etc/fstab", escapedTarget)
+	
+	cmd := exec.Command("bash", "-c", sedCmd)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		log.Printf("[NAS] Warning: Failed to remove from fstab: %v, output: %s\n", err, string(output))
+		return err
+	}
+	
+	return nil
+}
+
 // forceStopDevice uses fuser to kill processes and fully release a device
 func forceStopDevice(device string, maxRetries int) error {
 	for attempt := 1; attempt <= maxRetries; attempt++ {
@@ -669,8 +693,12 @@ func FormatAndMount(c *fiber.Ctx) error {
 				log.Printf("[NAS] Retrieved UUID: %s\n", uuid)
 				sendProgress(w, fmt.Sprintf("Step %d/%d: Adding UUID to /etc/fstab...", currentStep, totalSteps), "loading", currentStep, totalSteps)
 
-				// Create fstab entry
-				fstabEntry := fmt.Sprintf("UUID=%s %s %s defaults,noatime 0 2", uuid, mountDir, req.FileSystem)
+				// Cleanup any existing entries for this UUID or mount point to prevent duplicates
+				removeFromFstab(uuid)
+				removeFromFstab(mountDir)
+
+				// Create fstab entry with nofail to prevent emergency mode if drive is missing at boot
+				fstabEntry := fmt.Sprintf("UUID=%s %s %s defaults,noatime,nofail,x-systemd.device-timeout=5 0 2", uuid, mountDir, req.FileSystem)
 				log.Printf("[NAS] fstab entry: %s\n", fstabEntry)
 
 				// Add to fstab using tee
@@ -1040,7 +1068,12 @@ func UnmountDevice(c *fiber.Ctx) error {
 				log.Printf("[NAS] Warning: Failed to remove mount directory %s: %v, output: %s\n", target, err, string(output))
 				// Continue anyway - unmount was successful
 			}
+			}
 		}
+
+		// Step 3.5: Cleanup /etc/fstab entry to prevent boot issues
+		// Even if the device is unmounted, we don't want systemd trying to mount it on reboot
+		removeFromFstab(target)
 
 		// Step 4: Update database status
 		currentStep = 4

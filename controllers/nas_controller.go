@@ -336,13 +336,13 @@ func removeFromFstab(target string) error {
 	// We use sed to delete any line containing the target string
 	// This is simple and effective for cleaning up fstab
 	sedCmd := fmt.Sprintf("sudo sed -i '/%s/d' /etc/fstab", escapedTarget)
-	
+
 	cmd := exec.Command("bash", "-c", sedCmd)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		log.Printf("[NAS] Warning: Failed to remove from fstab: %v, output: %s\n", err, string(output))
 		return err
 	}
-	
+
 	return nil
 }
 
@@ -406,7 +406,7 @@ func detectRaidArrays() map[string]string {
 		for _, bd := range blockdevices {
 			bdMap, _ := bd.(map[string]interface{})
 			name, _ := bdMap["name"].(string)
-			
+
 			// Check if this device name appears in /proc/mdstat
 			mdstat, _ := os.ReadFile("/proc/mdstat")
 			if name != "" && strings.Contains(string(mdstat), name) {
@@ -442,7 +442,7 @@ func hardenDeviceCleanup(device string) error {
 
 	// 2. Identify and stop MD devices using this disk
 	devName := filepath.Base(device) // e.g., "sda"
-	
+
 	// CRITICAL: Wipe RAID superblocks first so the kernel releases its hold
 	log.Printf("[NAS] Wiping RAID superblocks on %s...", device)
 	exec.Command("sudo", "mdadm", "--zero-superblock", "--force", device).Run()
@@ -451,7 +451,7 @@ func hardenDeviceCleanup(device string) error {
 	// Parse /proc/mdstat to find EXACT md devices using this disk
 	mdstat, _ := os.ReadFile("/proc/mdstat")
 	mdstatStr := string(mdstat)
-	
+
 	// Example line: md127 : active raid1 sda1[0] sdb1[1]
 	// We look for "sda" in the line and extract the "mdX" part
 	lines := strings.Split(mdstatStr, "\n")
@@ -473,7 +473,7 @@ func hardenDeviceCleanup(device string) error {
 
 	log.Printf("[NAS] Force-creating new GPT label on %s...", device)
 	exec.Command("sudo", "parted", "-s", device, "mklabel", "gpt").Run()
-	
+
 	log.Printf("[NAS] Wiping disk headers with dd...")
 	exec.Command("sudo", "dd", "if=/dev/zero", "of="+device, "bs=1M", "count=50", "conv=notrunc").Run()
 
@@ -979,7 +979,7 @@ func UnmountDevice(c *fiber.Ctx) error {
 		// Step 0: Try to find the volume in the database to get its true mount point and ID
 		var volume models.Volume
 		dbResult := database.DB.Where("mount_point = ? OR device_path = ?", target, target).First(&volume)
-		
+
 		// If we found it, use the official mount point for all operations
 		if dbResult.Error == nil && volume.MountPoint != "" {
 			target = volume.MountPoint
@@ -1067,7 +1067,6 @@ func UnmountDevice(c *fiber.Ctx) error {
 			if output, err := rmCmd.CombinedOutput(); err != nil {
 				log.Printf("[NAS] Warning: Failed to remove mount directory %s: %v, output: %s\n", target, err, string(output))
 				// Continue anyway - unmount was successful
-			}
 			}
 		}
 

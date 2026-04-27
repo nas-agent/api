@@ -200,6 +200,7 @@ func SetupSetup(app *fiber.App) {
 	protected.Post("/nas/groups", controllers.CreateUserGroup)
 	protected.Post("/nas/groups/members", controllers.AddUserToGroup)
 	protected.Post("/nas/quotas", controllers.SetStorageQuota)
+	protected.Put("/nas/quotas/ai/:userId", controllers.UpdateAIQuota)
 
 	// Phase 4B: Volume Health & Monitoring
 	protected.Get("/nas/volumes/:volumeId/health", controllers.GetVolumeHealth)

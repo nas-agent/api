@@ -3,6 +3,7 @@ package controllers
 import (
 	"api/database"
 	"api/models"
+	"sort"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -21,10 +22,10 @@ type AdminDashboardStats struct {
 }
 
 type AdminActivity struct {
-	Type        string `json:"type"`
-	Description string `json:"description"`
-	User        string `json:"user"`
-	Timestamp   int64  `json:"timestamp"`
+	Type        string `json:"type" example:"ai_sort"`
+	Description string `json:"description" example:"Organized file.jpg to /photos"`
+	User        string `json:"user" example:"john_doe"`
+	Timestamp   int64  `json:"timestamp" example:"1672531200000"`
 }
 
 func GetAdminDashboardStats(c *fiber.Ctx) error {
@@ -66,44 +67,70 @@ func GetAdminDashboardStats(c *fiber.Ctx) error {
 func GetAdminRecentActivity(c *fiber.Ctx) error {
 	var activities []AdminActivity
 
-	// Get latest AI Actions
-	var logs []models.AIActionLog
+	// 1. Get latest AI Actions with usernames
+	type AIActionWithUsername struct {
+		models.AIActionLog
+		Username string
+	}
+	var aiLogs []AIActionWithUsername
 	if database.DB.Migrator().HasTable(&models.AIActionLog{}) {
-		// Use limit and order, note the column in models.AIActionLog is 'created_at' according to autoCreateTime but json is 'timestamp'
-		database.DB.Order("created_at desc").Limit(5).Find(&logs)
+		database.DB.Table("ai_action_logs").
+			Select("ai_action_logs.*, users.username").
+			Joins("left join users on users.id = ai_action_logs.user_id").
+			Order("ai_action_logs.created_at desc").
+			Limit(10).
+			Scan(&aiLogs)
 	}
 
-	for _, log := range logs {
-		timestamp := log.CreatedAt
-		if timestamp == 0 {
-			timestamp = time.Now().UnixMilli()
-		}
-
+	for _, log := range aiLogs {
 		activities = append(activities, AdminActivity{
 			Type:        "ai_sort",
 			Description: log.Action + " " + log.Filename,
-			User:        log.UserID, // Using UserID for now
-			Timestamp:   timestamp,
+			User:        log.Username,
+			Timestamp:   log.CreatedAt,
 		})
 	}
 
-	// Get latest User Registrations
+	// 2. Get latest User Registrations
 	var newUsers []models.User
-	database.DB.Order("created_at desc").Limit(5).Find(&newUsers)
+	database.DB.Order("created_at desc").Limit(10).Find(&newUsers)
 	for _, u := range newUsers {
-		timestamp := u.CreatedAt
-		if timestamp == 0 {
-			timestamp = time.Now().UnixMilli()
-		}
 		activities = append(activities, AdminActivity{
 			Type:        "user_registered",
 			Description: "New user registered: " + u.Username,
 			User:        u.Username,
-			Timestamp:   timestamp,
+			Timestamp:   u.CreatedAt,
 		})
 	}
 
-	// For now, if empty, send a default welcome message
+	// 3. Get latest System logs from ActivityLog
+	var systemLogs []models.ActivityLog
+	database.DB.Order("created_at desc").Limit(10).Find(&systemLogs)
+	for _, l := range systemLogs {
+		// Filter out duplicates that we already handled or redundant info
+		if l.Action == "AI_HISTORY_ADD" || l.Action == "USER_REGISTER" || l.Action == "USER_LOGIN" {
+			continue
+		}
+		
+		activities = append(activities, AdminActivity{
+			Type:        "system",
+			Description: l.Action + ": " + l.Message,
+			User:        l.Username,
+			Timestamp:   l.CreatedAt,
+		})
+	}
+
+	// Sort everything by timestamp descending
+	sort.Slice(activities, func(i, j int) bool {
+		return activities[i].Timestamp > activities[j].Timestamp
+	})
+
+	// Take exactly 10 if we have more
+	if len(activities) > 10 {
+		activities = activities[:10]
+	}
+
+	// Fallback message
 	if len(activities) == 0 {
 		activities = append(activities, AdminActivity{
 			Type:        "system_start",

@@ -21,6 +21,24 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
+// CheckAIQuota verifies if a user has exceeded their daily AI file limit
+func CheckAIQuota(userID string) (bool, int, int) {
+	var usage models.UserUsage
+	if err := database.DB.Where("user_id = ?", userID).First(&usage).Error; err != nil {
+		return true, 0, 100 // Default allow if no usage record exists
+	}
+
+	now := time.Now()
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).Unix()
+
+	var count int64
+	database.DB.Model(&models.AIActionLog{}).
+		Where("user_id = ? AND created_at >= ?", userID, todayStart).
+		Count(&count)
+
+	return int(count) < usage.AIFileLimitDaily, int(count), usage.AIFileLimitDaily
+}
+
 
 
 type AIAnalysisResponse struct {
@@ -244,6 +262,20 @@ func eventTypeString(op fsnotify.Op) string {
 	}
 }
 
+func recordAIAction(userID string, fileID uint, action, description, folder, filename string, isMove bool) {
+	database.DB.Create(&models.AIActionLog{
+		UserID:      userID,
+		FileID:      fileID,
+		Action:      action,
+		Description: description,
+		Folder:      folder,
+		Filename:    filename,
+		IsMove:      isMove,
+		Status:      "success",
+	})
+}
+
+
 // MetadataOnlySummary represents a condensed file analysis for batch clustering
 type MetadataOnlySummary struct {
 	FileName string              `json:"file_name"`
@@ -293,6 +325,13 @@ type ClusterResponse struct {
 }
 
 func processNewFile(sourcePath, fileName string, userID string, userAIConfig models.UserAIConfig) {
+	// Check Quota
+	allowed, used, limit := CheckAIQuota(userID)
+	if !allowed {
+		log.Printf("⚠️ AI Quota exceeded for user %s (%d/%d). File %s will NOT be processed.", userID, used, limit, fileName)
+		return
+	}
+
 	// Create Initial Metadata (Pending AI Analysis)
 	fileInfo, _ := os.Stat(sourcePath)
 	size := int64(0)
@@ -410,6 +449,10 @@ func processNewFile(sourcePath, fileName string, userID string, userAIConfig mod
 
 		log.Printf("✅ Categorized and moved file to: %s", finalDestPath)
 		NotifyFileMoved(destFileName, selectedFolder)
+		
+		recordAIAction(userID, metadata.ID, "auto_organize", 
+			fmt.Sprintf("Automatically organized '%s' into '%s'", fileName, selectedFolder),
+			selectedFolder, destFileName, true)
 	} else {
 		log.Printf("ℹ️ File NOT moved. DestinationPath='%s', AutoSelectFolder=%v", userAIConfig.DestinationPath, userAIConfig.AutoSelectFolder)
 	}
@@ -572,6 +615,12 @@ func ScanOrigin(userID string, customPath string, userPrompt string) (int, error
 
 	if _, err := os.Stat(originPath); os.IsNotExist(err) {
 		return 0, fmt.Errorf("scan path does not exist: %s", originPath)
+	}
+
+	// Check Quota
+	allowed, used, limit := CheckAIQuota(userID)
+	if !allowed {
+		return 0, fmt.Errorf("AI daily quota exceeded (%d/%d)", used, limit)
 	}
 
 	// 1. GATHER FILES
@@ -753,6 +802,10 @@ func ExecuteInPlaceMove(sourcePath, fileName, suggestedName, targetFolder, origi
 			database.DB.Save(&meta)
 		}
 		log.Printf("[Cleaner] Organized %s -> %s", finalName, targetFolder)
+
+		recordAIAction(userID, meta.ID, "scan_organize",
+			fmt.Sprintf("Batch organized '%s' into '%s'", fileName, targetFolder),
+			targetFolder, finalName, true)
 	}
 }
 

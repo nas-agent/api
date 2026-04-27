@@ -123,6 +123,17 @@ func buildFileCorpus(file models.FileMetadata, folderDesc string) string {
 }
 
 func containsTerm(corpus, term string) bool {
+	if strings.Contains(term, " | ") {
+		parts := strings.Split(term, " | ")
+		for _, p := range parts {
+			norm := normalizeTerm(p)
+			if norm != "" && strings.Contains(corpus, norm) {
+				return true
+			}
+		}
+		return false
+	}
+
 	normalized := normalizeTerm(term)
 	if normalized == "" {
 		return false
@@ -390,6 +401,17 @@ func SemanticSearch(c *fiber.Ctx) error {
 	if len(searchResults) < limit {
 		limit = len(searchResults)
 	}
+
+	// 6. Record search in history asynchronously
+	go func() {
+		database.DB.Create(&models.AIActionLog{
+			UserID:      userID,
+			Action:      "semantic_search",
+			Description: "Searched for: \"" + pythonResp.SemanticIntent + "\"",
+			Filename:    pythonResp.SemanticIntent,
+			Status:      "success",
+		})
+	}()
 
 	return c.JSON(fiber.Map{
 		"intent":              pythonResp.SemanticIntent,

@@ -1,7 +1,10 @@
 package controllers
 
 import (
+	"api/database"
+	"api/models"
 	"api/services"
+	"fmt"
 	"github.com/gofiber/fiber/v2"
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -54,6 +57,15 @@ func TriggerManualScan(c *fiber.Ctx) error {
 			"details": err.Error(),
 		})
 	}
+
+	// Record in history
+	database.DB.Create(&models.AIActionLog{
+		UserID:      userID,
+		Action:      "manual_scan",
+		Description: fmt.Sprintf("Manual scan of %s completed. Analyzed %d files.", targetPath, count),
+		Filename:    targetPath,
+		Status:      "success",
+	})
 
 	return c.JSON(fiber.Map{
 		"message": "Manual scan completed",

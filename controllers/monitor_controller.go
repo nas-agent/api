@@ -1,6 +1,8 @@
 package controllers
 
 import (
+	"api/config"
+	"encoding/json"
 	"fmt"
 	"github.com/gofiber/fiber/v2"
 	"github.com/shirou/gopsutil/v4/cpu"
@@ -8,6 +10,7 @@ import (
 	"github.com/shirou/gopsutil/v4/mem"
 	"github.com/shirou/gopsutil/v4/net"
 	"github.com/shirou/gopsutil/v4/sensors"
+	"net/http"
 	"time"
 )
 
@@ -81,5 +84,31 @@ func GetSystemStats(c *fiber.Ctx) error {
 		Timestamp: time.Now().Unix(),
 	}
 
+	return c.JSON(stats)
+}
+
+func GetAIMonitorStats(c *fiber.Ctx) error {
+	aiConfig := config.GetAIServiceConfig()
+	
+	// Fetch from agent service
+	client := &http.Client{Timeout: 5 * time.Second}
+	req, err := http.NewRequest("GET", aiConfig.Endpoint("/api/monitor"), nil)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to create request"})
+	}
+	
+	req.Header.Set("X-API-Key", aiConfig.APIKey)
+	
+	resp, err := client.Do(req)
+	if err != nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "Agent service unreachable"})
+	}
+	defer resp.Body.Close()
+	
+	var stats interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to decode agent response"})
+	}
+	
 	return c.JSON(stats)
 }

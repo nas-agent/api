@@ -209,6 +209,7 @@ func SetupSetup(app *fiber.App) {
 	protected.Get("/nas/volumes/:volumeId/cleanup-policy", controllers.GetCleanupPolicy)
 
 	protected.Get("/monitor", controllers.GetSystemStats)
+	protected.Get("/monitor/ai", controllers.GetAIMonitorStats)
 	protected.Get("/users", controllers.GetUsers)
 	protected.Delete("/users/:id", controllers.DeleteUser)
 

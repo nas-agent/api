@@ -239,6 +239,15 @@ func SetupSetup(app *fiber.App) {
 	// AI history (Protected)
 	protectedAI := ai.Group("/", JWTMiddleware())
 	protectedAI.Get("/history", controllers.GetHistory)
+	protectedAI.Get("/debug-history", func(c *fiber.Ctx) error {
+		userID := controllers.GetUserID(c)
+		var count int64
+		database.DB.Model(&models.AIActionLog{}).Where("user_id = ?", userID).Count(&count)
+		return c.JSON(fiber.Map{
+			"user_id": userID,
+			"count":   count,
+		})
+	})
 	protectedAI.Post("/history", controllers.AddHistory)
 	protectedAI.Delete("/history", controllers.ClearHistory)
 	protectedAI.Post("/feedback", controllers.SubmitPersonalizationFeedback)

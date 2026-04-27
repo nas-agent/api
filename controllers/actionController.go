@@ -3,6 +3,7 @@ package controllers
 import (
 	"api/database"
 	"api/models"
+	"fmt"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
@@ -14,6 +15,8 @@ func GetHistory(c *fiber.Ctx) error {
 	userID := GetUserID(c)
 	var history []models.AIActionLog
 	database.DB.Where("user_id = ?", userID).Order("log_id desc").Limit(100).Find(&history)
+
+	fmt.Printf("[DEBUG] GetHistory for userID: '%s', Found: %d logs\n", userID, len(history))
 
 	fileIDs := make([]uint, 0, len(history))
 	for _, h := range history {

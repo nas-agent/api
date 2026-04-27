@@ -178,7 +178,7 @@ func (pt *PathTranslator) GetSMBConfig() map[string]interface{} {
 	}
 }
 
-// ToWindowsPath converts a Linux NAS path back to a Windows-friendly UNC path
+// ToWindowsPath converts a Linux NAS path back to a Windows-friendly path (UNC or Drive Letter)
 func (pt *PathTranslator) ToWindowsPath(userID string, linuxPath string) string {
 	// Find the user's private share
 	var share models.Share
@@ -189,13 +189,36 @@ func (pt *PathTranslator) ToWindowsPath(userID string, linuxPath string) string 
 		}
 	}
 
+	// Check if user has a preferred drive mapping
+	var config models.UserAIConfig
+	var driveMapping string
+	if err := database.DB.Where("user_id = ?", userID).First(&config).Error; err == nil {
+		if config.WindowsDriveMapping != "" {
+			driveMapping = config.WindowsDriveMapping
+			if !strings.HasSuffix(driveMapping, ":") && !strings.Contains(driveMapping, ":\\") {
+				driveMapping += ":"
+			}
+		}
+	}
+
 	// Standardize paths
 	cleanLinux := filepath.Clean(linuxPath)
 	cleanShare := filepath.Clean(share.Path)
 
 	if strings.HasPrefix(cleanLinux, cleanShare) {
 		relPath, _ := filepath.Rel(cleanShare, cleanLinux)
-		// Construct UNC path: \\IP\share_name\subfolder\file.ext
+
+		// Option A: Drive Letter Mapping
+		if driveMapping != "" {
+			windowsPath := driveMapping
+			if relPath != "." {
+				windowsPath = filepath.Join(windowsPath, relPath)
+			}
+			// Replace forward slashes with backslashes for Windows
+			return strings.ReplaceAll(windowsPath, "/", "\\")
+		}
+
+		// Option B: UNC path fallback: \\IP\share_name\subfolder\file.ext
 		uncPath := fmt.Sprintf("\\\\%s\\%s", pt.RpiIP, share.Name)
 		if relPath != "." {
 			uncPath = fmt.Sprintf("%s\\%s", uncPath, strings.ReplaceAll(relPath, "/", "\\"))

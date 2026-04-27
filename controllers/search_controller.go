@@ -413,10 +413,18 @@ func SemanticSearch(c *fiber.Ctx) error {
 		})
 	}()
 
+	translator := services.NewPathTranslator()
+	finalResults := searchResults[:limit]
+	for i := range finalResults {
+		if finalResults[i].File.NASPath != "" {
+			finalResults[i].File.NASPath = translator.ToWindowsPath(userID, finalResults[i].File.NASPath)
+		}
+	}
+
 	return c.JSON(fiber.Map{
 		"intent":              pythonResp.SemanticIntent,
 		"filters":             pythonResp,
 		"rag_candidate_count": len(pythonResp.RAGCandidates),
-		"results":             searchResults[:limit],
+		"results":             finalResults,
 	})
 }

@@ -70,6 +70,27 @@ func RecordDecisionEvent(input DecisionEventInput) error {
 		return err
 	}
 
+	// NEW: Persist feedback status in AIActionLog for the History UI
+	if logIDRaw, ok := input.Metadata["log_id"]; ok {
+		var logID uint
+		switch v := logIDRaw.(type) {
+		case float64:
+			logID = uint(v)
+		case int:
+			logID = uint(v)
+		case uint:
+			logID = v
+		case string:
+			if id, err := strconv.ParseUint(v, 10, 32); err == nil {
+				logID = uint(id)
+			}
+		}
+
+		if logID > 0 {
+			database.DB.Model(&models.AIActionLog{}).Where("log_id = ? AND user_id = ?", logID, input.UserID).Update("status", input.Outcome)
+		}
+	}
+
 	if shouldCreateFeedback(input) {
 		feedbackType := "folder_correction"
 		original := input.SuggestedFolder

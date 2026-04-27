@@ -14,4 +14,5 @@ type UserAIConfig struct {
 	AnalysisProvider string  `gorm:"default:'local'" json:"analysis_provider"`
 	GeminiAPIKey     string  `gorm:"type:text" json:"gemini_api_key"`
 	GeminiModel      string  `gorm:"default:'gemini-2.0-flash'" json:"gemini_model"`
+	WindowsDriveMapping string  `gorm:"type:varchar(10);default:''" json:"windows_drive_mapping"`
 }

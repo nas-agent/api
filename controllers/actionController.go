@@ -3,6 +3,7 @@ package controllers
 import (
 	"api/database"
 	"api/models"
+	"api/services"
 	"fmt"
 	"strings"
 
@@ -41,11 +42,18 @@ func GetHistory(c *fiber.Ctx) error {
 		FullPath string `json:"full_path"`
 	}
 
+	translator := services.NewPathTranslator()
 	rows := make([]HistoryRow, 0, len(history))
 	for _, h := range history {
+		rawPath := pathsByFileID[h.FileID]
+		translatedPath := rawPath
+		if rawPath != "" {
+			translatedPath = translator.ToWindowsPath(userID, rawPath)
+		}
+
 		rows = append(rows, HistoryRow{
 			AIActionLog: h,
-			FullPath:    pathsByFileID[h.FileID],
+			FullPath:    translatedPath,
 		})
 	}
 

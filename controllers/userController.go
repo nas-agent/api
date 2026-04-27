@@ -87,6 +87,24 @@ func Register(c *fiber.Ctx) error {
 		})
 	}
 
+	// Initialize Usage
+	storageLimit, _ := data["storage_limit"].(float64)
+	if storageLimit == 0 {
+		storageLimit = 10
+	}
+	aiLimit, _ := data["ai_limit"].(float64)
+	if aiLimit == 0 {
+		aiLimit = 100
+	}
+
+	usage := models.UserUsage{
+		UserID:           user.ID,
+		StorageMB:        0,
+		StorageLimitGB:   storageLimit,
+		AIFileLimitDaily: int(aiLimit),
+	}
+	database.DB.Create(&usage)
+
 	return c.JSON(user)
 }
 
@@ -214,8 +232,20 @@ func GetProfile(c *fiber.Ctx) error {
 // GetUsers returns a list of all users
 func GetUsers(c *fiber.Ctx) error {
 	var users []models.User
-	if err := database.DB.Find(&users).Error; err != nil {
+	if err := database.DB.Preload("Usage").Find(&users).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{"message": "Error fetching users"})
+	}
+
+	// Calculate AI usage for today for each user
+	now := time.Now()
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).Unix()
+
+	for i := range users {
+		var count int64
+		database.DB.Model(&models.AIActionLog{}).
+			Where("user_id = ? AND created_at >= ?", users[i].ID, todayStart).
+			Count(&count)
+		users[i].Usage.AIUsedToday = int(count)
 	}
 
 	return c.JSON(users)

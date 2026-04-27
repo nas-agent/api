@@ -258,6 +258,7 @@ type ClusterRequest struct {
 	Files           []MetadataOnlySummary `json:"files"`
 	ExistingFolders []string              `json:"existing_folders"`
 	FolderProfiles  map[string]string     `json:"folder_profiles"`
+	UserPrompt      string                `json:"user_prompt"`
 	GeminiAPIKey    string                `json:"gemini_api_key"`
 	GeminiModel     string                `json:"gemini_model"`
 	RenameFile      bool                  `json:"rename_file"`
@@ -547,7 +548,7 @@ func detectMimeType(fileName string) string {
 }
 
 // ScanOrigin implements the Three-Phase Batch Processing for In-Place Clustering
-func ScanOrigin(userID string, customPath string) (int, error) {
+func ScanOrigin(userID string, customPath string, userPrompt string) (int, error) {
 	var userAIConfig models.UserAIConfig
 	if err := database.DB.Where("user_id = ?", userID).First(&userAIConfig).Error; err != nil {
 		return 0, fmt.Errorf("user AI configuration not found: %v", err)
@@ -621,7 +622,7 @@ func ScanOrigin(userID string, customPath string) (int, error) {
 
 	// 3. PHASE 2: GLOBAL DECISION (Clustering)
 	log.Printf("[Batch Scan] Starting Phase 2: Requesting master plan...")
-	clusterResp, err := triggerBatchClustering(userID, summaries, existingFolders, folderProfiles, userAIConfig)
+	clusterResp, err := triggerBatchClustering(userID, summaries, existingFolders, folderProfiles, userAIConfig, userPrompt)
 	if err != nil {
 		return 0, fmt.Errorf("batch clustering failed: %v", err)
 	}
@@ -673,12 +674,13 @@ func getFolderProfiles(userID string) map[string]string {
 	return profiles
 }
 
-func triggerBatchClustering(userID string, summaries []MetadataOnlySummary, existing []string, profiles map[string]string, userAIConfig models.UserAIConfig) (*ClusterResponse, error) {
+func triggerBatchClustering(userID string, summaries []MetadataOnlySummary, existing []string, profiles map[string]string, userAIConfig models.UserAIConfig, userPrompt string) (*ClusterResponse, error) {
 	payload := ClusterRequest{
 		UserID:          userID,
 		Files:           summaries,
 		ExistingFolders: existing,
 		FolderProfiles:  profiles,
+		UserPrompt:      userPrompt,
 		GeminiAPIKey:    userAIConfig.GeminiAPIKey,
 		GeminiModel:     userAIConfig.GeminiModel,
 		RenameFile:      userAIConfig.RenameFile,

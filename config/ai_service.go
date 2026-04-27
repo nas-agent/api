@@ -21,7 +21,7 @@ func GetAIServiceConfig() AIServiceConfig {
 		if AIServiceURLFlag != "" {
 			baseURL = AIServiceURLFlag
 		} else {
-			baseURL = "https://fx8gncn0-8000.asse.devtunnels.ms"
+			baseURL = "http://localhost:8000"
 		}
 	}
 

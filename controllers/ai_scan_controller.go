@@ -27,7 +27,8 @@ func TriggerManualScan(c *fiber.Ctx) error {
 
 	// Parse custom path from request body (optional)
 	var req struct {
-		Path string `json:"path"`
+		Path       string `json:"path"`
+		UserPrompt string `json:"user_prompt"`
 	}
 	c.BodyParser(&req)
 
@@ -46,7 +47,7 @@ func TriggerManualScan(c *fiber.Ctx) error {
 	}
 
 	// Trigger the scan
-	count, err := services.ScanOrigin(userID, targetPath)
+	count, err := services.ScanOrigin(userID, targetPath, req.UserPrompt)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error":   "Failed to scan origin path",

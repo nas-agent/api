@@ -185,6 +185,10 @@ func SetupSetup(app *fiber.App) {
 	protected.Get("/nas/users/:userId/volumes", controllers.GetUserVolumes)
 	protected.Get("/nas/volumes/:volumeId/users", controllers.GetVolumeUsers)
 	protected.Get("/nas/network/interfaces", controllers.GetNetworkInterfaces)
+	protected.Get("/system/security/status", controllers.GetSecurityStatus)
+	protected.Put("/system/security/toggle", controllers.ToggleSecurityFeature)
+	protected.Get("/system/firewall/rules", controllers.GetFirewallRules)
+	protected.Get("/system/security/blocked-ips", controllers.GetBlockedIPs)
 
 	// Share Management
 	protected.Get("/nas/shares", controllers.GetShares)
@@ -211,6 +215,7 @@ func SetupSetup(app *fiber.App) {
 
 	protected.Get("/monitor", controllers.GetSystemStats)
 	protected.Get("/monitor/ai", controllers.GetAIMonitorStats)
+	protected.Get("/system/disks", controllers.GetDiskStats)
 	protected.Get("/users", controllers.GetUsers)
 	protected.Delete("/users/:id", controllers.DeleteUser)
 

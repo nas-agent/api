@@ -639,9 +639,14 @@ func GenerateFolderDescription(c *fiber.Ctx) error {
 	database.DB.Where("owner_id = ? AND nas_path LIKE ?", userID, searchPattern).Limit(15).Find(&files)
 
 	fileContexts := make([]map[string]string, 0)
+	// Gather files that are logically located in this folder
 	for _, f := range files {
-		// Only take files that are actually IN that folder (base dir matches)
-		if filepath.Base(filepath.Dir(f.NASPath)) == req.FolderName {
+		dir := filepath.ToSlash(filepath.Dir(f.NASPath))
+		folder := filepath.ToSlash(req.FolderName)
+		
+		// Match if the file's directory ends with or contains the folder name in a way that makes sense
+		// Since searchPattern already filtered by LIKE %folder%, we just need to be sure it's a good match
+		if strings.HasSuffix(dir, folder) {
 			fileContexts = append(fileContexts, map[string]string{
 				"name":    f.FileName,
 				"summary": f.Summary,
@@ -655,6 +660,7 @@ func GenerateFolderDescription(c *fiber.Ctx) error {
 		"folder_name":    req.FolderName,
 		"file_contexts":  fileContexts,
 		"gemini_api_key": userAIConfig.GeminiAPIKey,
+		"gemini_model":   userAIConfig.GeminiModel,
 	}
 
 	jsonData, _ := json.Marshal(payload)

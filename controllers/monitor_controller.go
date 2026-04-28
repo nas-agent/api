@@ -10,17 +10,27 @@ import (
 	"github.com/shirou/gopsutil/v4/mem"
 	"github.com/shirou/gopsutil/v4/net"
 	"github.com/shirou/gopsutil/v4/sensors"
+	"github.com/shirou/gopsutil/v4/disk"
 	"net/http"
 	"time"
 )
 
 type SystemStats struct {
-	CPUUsage   float64            `json:"cpu_usage"`
-	RAM        RAMStats           `json:"ram"`
-	Network    NetworkStats       `json:"network"`
-	CPUTempC   float64            `json:"cpu_temp_c"`
-	Uptime     string             `json:"uptime"`
-	Timestamp  int64              `json:"timestamp"`
+	CPUUsage  float64      `json:"cpu_usage"`
+	RAM       RAMStats     `json:"ram"`
+	Network   NetworkStats `json:"network"`
+	CPUTempC  float64      `json:"cpu_temp_c"`
+	Uptime    string       `json:"uptime"`
+	Timestamp int64        `json:"timestamp"`
+}
+
+type DiskStats struct {
+	Name    string  `json:"name"`
+	Path    string  `json:"path"`
+	Total   uint64  `json:"total"`
+	Used    uint64  `json:"used"`
+	Free    uint64  `json:"free"`
+	Percent float64 `json:"percent"`
 }
 
 type RAMStats struct {
@@ -32,6 +42,34 @@ type RAMStats struct {
 type NetworkStats struct {
 	RxBytes uint64 `json:"rx_bytes"`
 	TxBytes uint64 `json:"tx_bytes"`
+}
+
+func GetDiskStats(c *fiber.Ctx) error {
+	partitions, err := disk.Partitions(false)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to get partitions"})
+	}
+
+	var results []DiskStats
+	for _, p := range partitions {
+		usage, err := disk.Usage(p.Mountpoint)
+		if err != nil {
+			continue
+		}
+
+		// Filter out small/virtual partitions if needed, but for NAS we want main ones
+		// Usually we want /, /mnt/*, /srv/*
+		results = append(results, DiskStats{
+			Name:    p.Device,
+			Path:    p.Mountpoint,
+			Total:   usage.Total,
+			Used:    usage.Used,
+			Free:    usage.Free,
+			Percent: usage.UsedPercent,
+		})
+	}
+
+	return c.JSON(results)
 }
 
 func GetSystemStats(c *fiber.Ctx) error {

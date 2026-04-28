@@ -268,16 +268,18 @@ func eventTypeString(op fsnotify.Op) string {
 	}
 }
 
-func recordAIAction(userID string, fileID uint, action, description, folder, filename string, isMove bool) {
+func recordAIAction(userID string, fileID uint, action, description, folder, filename, originalPath string, isMove bool, confidence int) {
 	database.DB.Create(&models.AIActionLog{
-		UserID:      userID,
-		FileID:      fileID,
-		Action:      action,
-		Description: description,
-		Folder:      folder,
-		Filename:    filename,
-		IsMove:      isMove,
-		Status:      "success",
+		UserID:       userID,
+		FileID:       fileID,
+		Action:       action,
+		Description:  description,
+		Folder:       folder,
+		Filename:     filename,
+		OriginalPath: originalPath,
+		IsMove:       isMove,
+		Confidence:   confidence,
+		Status:       "success",
 	})
 }
 
@@ -459,7 +461,7 @@ func processNewFile(sourcePath, fileName string, userID string, userAIConfig mod
 		
 		recordAIAction(userID, metadata.ID, "auto_organize", 
 			fmt.Sprintf("Automatically organized '%s' into '%s'", fileName, selectedFolder),
-			selectedFolder, destFileName, true)
+			selectedFolder, destFileName, sourcePath, true, aiResp.ConfidenceScore)
 	} else {
 		log.Printf("ℹ️ File NOT moved. DestinationPath='%s', AutoSelectFolder=%v", userAIConfig.DestinationPath, userAIConfig.AutoSelectFolder)
 	}
@@ -815,7 +817,7 @@ func ExecuteInPlaceMove(sourcePath, fileName, suggestedName, targetFolder, origi
 
 		recordAIAction(userID, meta.ID, "scan_organize",
 			fmt.Sprintf("Batch organized '%s' into '%s'", fileName, targetFolder),
-			targetFolder, finalName, true)
+			targetFolder, finalName, sourcePath, true, 100)
 	}
 }
 

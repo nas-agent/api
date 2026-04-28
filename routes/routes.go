@@ -258,6 +258,7 @@ func SetupSetup(app *fiber.App) {
 	protectedAI.Put("/personalization/folder-description", controllers.UpdateFolderProfileDescription)
 	protectedAI.Delete("/personalization/reset", controllers.ResetPersonalization)
 	protectedAI.Post("/naming/suggest", controllers.SuggestPersonalizedFilename)
+	protectedAI.Post("/review/:id", controllers.HandleAIActionReview)
 
 	// Monitors
 	protectedAI.Get("/monitors", controllers.GetMonitors)

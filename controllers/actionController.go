@@ -5,7 +5,6 @@ import (
 	"api/models"
 	"api/services"
 	"fmt"
-	"strings"
 
 	"github.com/gofiber/fiber/v2"
 )
@@ -19,6 +18,12 @@ func GetHistory(c *fiber.Ctx) error {
 
 	fmt.Printf("[DEBUG] GetHistory for userID: '%s', Found: %d logs\n", userID, len(history))
 
+	type HistoryRow struct {
+		models.AIActionLog
+		FullPath string `json:"full_path"`
+		Summary  string `json:"summary"`
+	}
+
 	fileIDs := make([]uint, 0, len(history))
 	for _, h := range history {
 		if h.FileID > 0 {
@@ -26,26 +31,23 @@ func GetHistory(c *fiber.Ctx) error {
 		}
 	}
 
-	pathsByFileID := map[uint]string{}
+	fileDataByFileID := map[uint]struct{ path, summary string }{}
 	if len(fileIDs) > 0 {
 		var files []models.FileMetadata
-		database.DB.Select("id, nas_path").Where("id IN ?", fileIDs).Find(&files)
+		database.DB.Select("id, nas_path, summary").Where("id IN ?", fileIDs).Find(&files)
 		for _, file := range files {
-			if strings.TrimSpace(file.NASPath) != "" {
-				pathsByFileID[file.ID] = file.NASPath
+			fileDataByFileID[file.ID] = struct{ path, summary string }{
+				path:    file.NASPath,
+				summary: file.Summary,
 			}
 		}
-	}
-
-	type HistoryRow struct {
-		models.AIActionLog
-		FullPath string `json:"full_path"`
 	}
 
 	translator := services.NewPathTranslator()
 	rows := make([]HistoryRow, 0, len(history))
 	for _, h := range history {
-		rawPath := pathsByFileID[h.FileID]
+		fData := fileDataByFileID[h.FileID]
+		rawPath := fData.path
 		translatedPath := rawPath
 		if rawPath != "" {
 			translatedPath = translator.ToWindowsPath(userID, rawPath)
@@ -54,6 +56,7 @@ func GetHistory(c *fiber.Ctx) error {
 		rows = append(rows, HistoryRow{
 			AIActionLog: h,
 			FullPath:    translatedPath,
+			Summary:     fData.summary,
 		})
 	}
 

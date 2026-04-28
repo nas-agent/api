@@ -9,12 +9,14 @@ import (
 
 // NotificationEvent represents the structure of a notification
 type NotificationEvent struct {
-	Type     string `json:"type"`
-	Title    string `json:"title"`
-	Body     string `json:"body"`
-	Filename string `json:"filename"`
-	Folder   string `json:"folder"`
-	UserID   string `json:"user_id"`
+	Type       string `json:"type"`
+	Title      string `json:"title"`
+	Body       string `json:"body"`
+	Filename   string `json:"filename"`
+	Folder     string `json:"folder"`
+	UserID     string `json:"user_id"`
+	Summary    string `json:"summary,omitempty"`
+	Confidence int    `json:"confidence,omitempty"`
 }
 
 var (
@@ -51,7 +53,7 @@ func PollNotifications(c *fiber.Ctx) error {
 }
 
 // NotifyFileMoved broadcasts a file moved notification and adds to pending queue for polling fallback
-func NotifyFileMoved(filename, folder string, userID string) {
+func NotifyFileMoved(filename, folder string, userID string, summary string, confidence int) {
 	notifMutex.Lock()
 	defer notifMutex.Unlock()
 
@@ -59,23 +61,27 @@ func NotifyFileMoved(filename, folder string, userID string) {
 	winFolder := translator.ToWindowsPath(userID, folder)
 
 	event := NotificationEvent{
-		Type:     "file_moved",
-		Title:    "AI Assistant",
-		Body:     fmt.Sprintf("Moved '%s' to folder '%s'", filename, folder),
-		Filename: filename,
-		Folder:   winFolder,
-		UserID:   userID,
+		Type:       "file_moved",
+		Title:      "AI Assistant",
+		Body:       fmt.Sprintf("Moved '%s' to folder '%s'", filename, folder),
+		Filename:   filename,
+		Folder:     winFolder,
+		UserID:     userID,
+		Summary:    summary,
+		Confidence: confidence,
 	}
 
 	// Broadcast via WebSocket if available
 	if broadcaster != nil {
 		broadcaster.Broadcast(map[string]interface{}{
-			"type":     event.Type,
-			"title":    event.Title,
-			"body":     event.Body,
-			"filename": event.Filename,
-			"folder":   event.Folder,
-			"user_id":   event.UserID,
+			"type":       event.Type,
+			"title":      event.Title,
+			"body":       event.Body,
+			"filename":   event.Filename,
+			"folder":     event.Folder,
+			"user_id":    event.UserID,
+			"summary":    event.Summary,
+			"confidence": event.Confidence,
 		})
 	}
 
@@ -84,7 +90,7 @@ func NotifyFileMoved(filename, folder string, userID string) {
 }
 
 // NotifyApprovalNeeded broadcasts a notification when a file requires manual review.
-func NotifyApprovalNeeded(filename, suggestedFolder string, userID string) {
+func NotifyApprovalNeeded(filename, suggestedFolder string, userID string, summary string, confidence int) {
 	notifMutex.Lock()
 	defer notifMutex.Unlock()
 
@@ -92,23 +98,27 @@ func NotifyApprovalNeeded(filename, suggestedFolder string, userID string) {
 	winFolder := translator.ToWindowsPath(userID, suggestedFolder)
 
 	event := NotificationEvent{
-		Type:     "approval_needed",
-		Title:    "AI Assistant",
-		Body:     fmt.Sprintf("Review needed for '%s' -> suggested folder '%s'", filename, suggestedFolder),
-		Filename: filename,
-		Folder:   winFolder,
-		UserID:   userID,
+		Type:       "approval_needed",
+		Title:      "AI Assistant",
+		Body:       fmt.Sprintf("Review needed for '%s' -> suggested folder '%s'", filename, suggestedFolder),
+		Filename:   filename,
+		Folder:     winFolder,
+		UserID:     userID,
+		Summary:    summary,
+		Confidence: confidence,
 	}
 
 	// Broadcast via WebSocket if available
 	if broadcaster != nil {
 		broadcaster.Broadcast(map[string]interface{}{
-			"type":     event.Type,
-			"title":    event.Title,
-			"body":     event.Body,
-			"filename": event.Filename,
-			"folder":   event.Folder,
-			"user_id":   event.UserID,
+			"type":       event.Type,
+			"title":      event.Title,
+			"body":       event.Body,
+			"filename":   event.Filename,
+			"folder":     event.Folder,
+			"user_id":    event.UserID,
+			"summary":    event.Summary,
+			"confidence": event.Confidence,
 		})
 	}
 

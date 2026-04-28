@@ -450,20 +450,21 @@ func processNewFile(sourcePath, fileName string, userID string, userAIConfig mod
 		} else {
 			log.Printf("🗑️ Original file removed: %s", sourcePath)
 		}
-
+		
 		// Update Metadata with final path
 		metadata.NASPath = finalDestPath
 		metadata.FileName = destFileName
 		database.DB.Save(&metadata)
 
 		log.Printf("✅ Categorized and moved file to: %s", finalDestPath)
-		NotifyFileMoved(destFileName, selectedFolder, userID)
+		NotifyFileMoved(destFileName, selectedFolder, userID, aiResp.Summary, aiResp.ConfidenceScore)
 		
 		recordAIAction(userID, metadata.ID, "auto_organize", 
 			fmt.Sprintf("Automatically organized '%s' into '%s'", fileName, selectedFolder),
 			selectedFolder, destFileName, sourcePath, true, aiResp.ConfidenceScore)
 	} else {
-		log.Printf("ℹ️ File NOT moved. DestinationPath='%s', AutoSelectFolder=%v", userAIConfig.DestinationPath, userAIConfig.AutoSelectFolder)
+		log.Printf("ℹ️ File NOT moved. DestinationPath='%s', AutoSelectFolder=%v. Notifying for approval.", userAIConfig.DestinationPath, userAIConfig.AutoSelectFolder)
+		NotifyApprovalNeeded(fileName, selectedFolder, userID, aiResp.Summary, aiResp.ConfidenceScore)
 	}
 }
 
@@ -564,13 +565,25 @@ func triggerAIAnalysis(fileID uint, filePath string, fileName string, userID str
 		}
 		
 		if pollResp.StatusCode == http.StatusOK {
-			var aiResponse AIAnalysisResponse
-			if err := json.NewDecoder(pollResp.Body).Decode(&aiResponse); err == nil {
-				// If summary is "PENDING", it's still processing
-				if aiResponse.Summary != "PENDING" {
+			var raw map[string]interface{}
+			if err := json.NewDecoder(pollResp.Body).Decode(&raw); err == nil {
+				// Check if it's still processing
+				if status, ok := raw["status"].(string); ok && status == "processing" {
+					log.Printf("[AI] Job %s still processing...", jobID)
 					pollResp.Body.Close()
-					log.Printf("[AI] Job %s completed successfully.", jobID)
-					return &aiResponse, nil
+					continue
+				}
+
+				// If not processing, it should be the final result
+				// Re-encode and decode into AIAnalysisResponse to be safe or just map manually
+				jsonData, _ := json.Marshal(raw)
+				var aiResponse AIAnalysisResponse
+				if err := json.Unmarshal(jsonData, &aiResponse); err == nil {
+					if aiResponse.Summary != "" {
+						pollResp.Body.Close()
+						log.Printf("[AI] Job %s completed successfully.", jobID)
+						return &aiResponse, nil
+					}
 				}
 			}
 		} else if pollResp.StatusCode != http.StatusAccepted && pollResp.StatusCode != http.StatusOK {
@@ -711,17 +724,39 @@ func ScanOrigin(userID string, customPath string, userPrompt string) (int, error
 }
 
 func listExistingFolders(userID string, config models.UserAIConfig) []string {
-	folders := []string{}
 	if config.DestinationPath == "" {
-		return folders
+		return nil
 	}
-	dest := filepath.Clean(config.DestinationPath)
-	entries, _ := os.ReadDir(dest)
-	for _, e := range entries {
-		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
-			folders = append(folders, e.Name())
+
+	destPath := filepath.Clean(config.DestinationPath)
+	var folders []string
+	
+	// Recursive scan with max depth 3
+	var scanDir func(string, int)
+	scanDir = func(currentPath string, depth int) {
+		if depth > 3 {
+			return
+		}
+		
+		entries, err := os.ReadDir(currentPath)
+		if err != nil {
+			return
+		}
+		
+		for _, entry := range entries {
+			if entry.IsDir() {
+				// Get path relative to destPath
+				rel, err := filepath.Rel(destPath, filepath.Join(currentPath, entry.Name()))
+				if err == nil {
+					// Normalize to forward slashes for AI
+					folders = append(folders, strings.ReplaceAll(rel, "\\", "/"))
+					scanDir(filepath.Join(currentPath, entry.Name()), depth+1)
+				}
+			}
 		}
 	}
+	
+	scanDir(destPath, 1)
 	return folders
 }
 

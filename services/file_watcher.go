@@ -329,6 +329,7 @@ func processNewFile(sourcePath, fileName string, userID string, userAIConfig mod
 	allowed, used, limit := CheckAIQuota(userID)
 	if !allowed {
 		log.Printf("⚠️ AI Quota exceeded for user %s (%d/%d). File %s will NOT be processed.", userID, used, limit, fileName)
+		NotifyQuotaExceeded(fileName, filepath.Dir(sourcePath))
 		return
 	}
 
@@ -620,6 +621,7 @@ func ScanOrigin(userID string, customPath string, userPrompt string) (int, error
 	// Check Quota
 	allowed, used, limit := CheckAIQuota(userID)
 	if !allowed {
+		NotifyQuotaExceeded("Batch Scan", originPath)
 		return 0, fmt.Errorf("AI daily quota exceeded (%d/%d)", used, limit)
 	}
 
@@ -694,6 +696,8 @@ func ScanOrigin(userID string, customPath string, userPrompt string) (int, error
 		ExecuteInPlaceMove(f.Path, f.Name, suggestedName, targetSubfolder, originPath, userID)
 		filesMoved++
 	}
+
+	NotifyTaskCompleted("Scan Completed", fmt.Sprintf("Finished processing %d files in %s", filesMoved, originPath))
 
 	return filesMoved, nil
 }

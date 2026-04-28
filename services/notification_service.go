@@ -104,3 +104,54 @@ func NotifyApprovalNeeded(filename, suggestedFolder string) {
 	// Also keep in pending queue for polling fallback
 	pendingNotifications = append(pendingNotifications, event)
 }
+// NotifyQuotaExceeded broadcasts a notification when AI quota is reached.
+func NotifyQuotaExceeded(filename, folder string) {
+	notifMutex.Lock()
+	defer notifMutex.Unlock()
+
+	event := NotificationEvent{
+		Type:     "quota_exceeded",
+		Title:    "AI Quota Reached",
+		Body:     fmt.Sprintf("Daily limit reached. Manual sorting required for '%s'. Contact admin or try again tomorrow.", filename),
+		Filename: filename,
+		Folder:   folder,
+	}
+
+	// Broadcast via WebSocket if available
+	if broadcaster != nil {
+		broadcaster.Broadcast(map[string]interface{}{
+			"type":     event.Type,
+			"title":    event.Title,
+			"body":     event.Body,
+			"filename": event.Filename,
+			"folder":   event.Folder,
+		})
+	}
+
+	// Also keep in pending queue for polling fallback
+	pendingNotifications = append(pendingNotifications, event)
+}
+
+// NotifyTaskCompleted broadcasts a notification when a background task (like batch scan) completes.
+func NotifyTaskCompleted(title, body string) {
+	notifMutex.Lock()
+	defer notifMutex.Unlock()
+
+	event := NotificationEvent{
+		Type:  "task_completed",
+		Title: title,
+		Body:  body,
+	}
+
+	// Broadcast via WebSocket if available
+	if broadcaster != nil {
+		broadcaster.Broadcast(map[string]interface{}{
+			"type":  event.Type,
+			"title": event.Title,
+			"body":  event.Body,
+		})
+	}
+
+	// Also keep in pending queue for polling fallback
+	pendingNotifications = append(pendingNotifications, event)
+}

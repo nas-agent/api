@@ -77,7 +77,7 @@ func checkSudoersConfig() {
 		log.Printf("Ensuring host user '%s' is in 'sambashare' group...", currentUser)
 		exec.Command("sudo", "groupadd", "-f", "sambashare").Run()
 		exec.Command("sudo", "usermod", "-a", "-G", "sambashare", currentUser).Run()
-		
+
 		// Log current effective groups for diagnosis
 		groupsOut, _ := exec.Command("groups", currentUser).Output()
 		log.Printf("✓ Host user '%s' groups: %s", currentUser, strings.TrimSpace(string(groupsOut)))
@@ -272,10 +272,13 @@ type NotificationBroadcaster struct {
 }
 
 type notification struct {
-	Type    string `json:"type"`
-	Title   string `json:"title"`
-	Body    string `json:"body"`
-	Message string `json:"message,omitempty"`
+	Type     string `json:"type"`
+	Title    string `json:"title"`
+	Body     string `json:"body"`
+	Message  string `json:"message,omitempty"`
+	Filename string `json:"filename,omitempty"`
+	Folder   string `json:"folder,omitempty"`
+	UserID   string `json:"user_id,omitempty"`
 }
 
 var websocketConfig = websocket.Config{
@@ -338,10 +341,13 @@ func (nb *NotificationBroadcaster) Broadcast(notif interface{}) {
 	case map[string]interface{}:
 		// Convert map to notification
 		converted := notification{
-			Type:    toString(n["type"]),
-			Title:   toString(n["title"]),
-			Body:    toString(n["body"]),
-			Message: toString(n["message"]),
+			Type:     toString(n["type"]),
+			Title:    toString(n["title"]),
+			Body:     toString(n["body"]),
+			Message:  toString(n["message"]),
+			Filename: toString(n["filename"]),
+			Folder:   toString(n["folder"]),
+			UserID:   toString(n["user_id"]),
 		}
 		select {
 		case nb.broadcast <- converted:

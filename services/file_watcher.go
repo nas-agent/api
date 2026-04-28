@@ -25,7 +25,13 @@ import (
 func CheckAIQuota(userID string) (bool, int, int) {
 	var usage models.UserUsage
 	if err := database.DB.Where("user_id = ?", userID).First(&usage).Error; err != nil {
-		return true, 0, 100 // Default allow if no usage record exists
+		// Default allow if no usage record exists
+		return true, 0, -1
+	}
+
+	// If limit is -1, it's unlimited
+	if usage.AIFileLimitDaily == -1 {
+		return true, 0, -1
 	}
 
 	now := time.Now()
@@ -329,7 +335,7 @@ func processNewFile(sourcePath, fileName string, userID string, userAIConfig mod
 	allowed, used, limit := CheckAIQuota(userID)
 	if !allowed {
 		log.Printf("⚠️ AI Quota exceeded for user %s (%d/%d). File %s will NOT be processed.", userID, used, limit, fileName)
-		NotifyQuotaExceeded(fileName, filepath.Dir(sourcePath))
+		NotifyQuotaExceeded(fileName, filepath.Dir(sourcePath), userID)
 		return
 	}
 
@@ -449,7 +455,7 @@ func processNewFile(sourcePath, fileName string, userID string, userAIConfig mod
 		database.DB.Save(&metadata)
 
 		log.Printf("✅ Categorized and moved file to: %s", finalDestPath)
-		NotifyFileMoved(destFileName, selectedFolder)
+		NotifyFileMoved(destFileName, selectedFolder, userID)
 		
 		recordAIAction(userID, metadata.ID, "auto_organize", 
 			fmt.Sprintf("Automatically organized '%s' into '%s'", fileName, selectedFolder),
@@ -621,7 +627,7 @@ func ScanOrigin(userID string, customPath string, userPrompt string) (int, error
 	// Check Quota
 	allowed, used, limit := CheckAIQuota(userID)
 	if !allowed {
-		NotifyQuotaExceeded("Batch Scan", originPath)
+		NotifyQuotaExceeded("Batch Scan", originPath, userID)
 		return 0, fmt.Errorf("AI daily quota exceeded (%d/%d)", used, limit)
 	}
 
@@ -697,7 +703,7 @@ func ScanOrigin(userID string, customPath string, userPrompt string) (int, error
 		filesMoved++
 	}
 
-	NotifyTaskCompleted("Scan Completed", fmt.Sprintf("Finished processing %d files in %s", filesMoved, originPath))
+	NotifyTaskCompleted("Batch Scan Completed", fmt.Sprintf("Processed %d files in %s", filesMoved, originPath), userID)
 
 	return filesMoved, nil
 }

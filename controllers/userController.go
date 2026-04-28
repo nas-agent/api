@@ -92,10 +92,11 @@ func Register(c *fiber.Ctx) error {
 	if storageLimit == 0 {
 		storageLimit = 10
 	}
-	aiLimit, _ := data["ai_limit"].(float64)
-	if aiLimit == 0 {
-		aiLimit = 100
+	aiLimitVal, ok := data["ai_limit"].(float64)
+	if !ok {
+		aiLimitVal = -1 // Default to unlimited if not set
 	}
+	aiLimit := int(aiLimitVal)
 
 	usage := models.UserUsage{
 		UserID:           user.ID,

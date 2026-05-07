@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"os"
 	"time"
 
@@ -56,6 +57,8 @@ func CreatePublicShare(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to create share"})
 	}
 
+	log.Printf("[Share] Created public share: %s for file: %s", token, metadata.FileName)
+
 	return c.JSON(fiber.Map{
 		"token":      token,
 		"share_url":  fmt.Sprintf("/s/%s", token),
@@ -73,16 +76,32 @@ func GetPublicShares(c *fiber.Ctx) error {
 func DeletePublicShare(c *fiber.Ctx) error {
 	userID := GetUserID(c)
 	token := c.Params("token")
-	if err := database.DB.Where("id = ? AND user_id = ?", token, userID).Delete(&models.PublicShare{}).Error; err != nil {
+	log.Printf("[Share] Attempting to permanently delete share: %s for user: %s", token, userID)
+	
+	result := database.DB.Unscoped().Where("id = ? AND user_id = ?", token, userID).Delete(&models.PublicShare{})
+	if result.Error != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to delete share"})
 	}
+	
+	if result.RowsAffected == 0 {
+		log.Printf("[Share] No share found to delete for token: %s", token)
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "share not found"})
+	}
+
+	log.Printf("[Share] Successfully deleted share: %s (Permanent)", token)
 	return c.JSON(fiber.Map{"message": "share deleted"})
 }
 
 func ServePublicFile(c *fiber.Ctx) error {
 	token := c.Params("token")
 	var share models.PublicShare
+	
+	log.Printf("[Share] Serving public file request for token: %s", token)
+	
+	// Use Unscoped() here is NOT what we want, but we want to ensure we don't find deleted ones.
+	// GORM's First() already adds "deleted_at IS NULL" automatically.
 	if err := database.DB.Where("id = ?", token).First(&share).Error; err != nil {
+		log.Printf("[Share] Token not found or deleted: %s - Error: %v", token, err)
 		return c.Status(fiber.StatusNotFound).SendString("File not found or link expired")
 	}
 

@@ -45,8 +45,6 @@ func CheckAIQuota(userID string) (bool, int, int) {
 	return int(count) < usage.AIFileLimitDaily, int(count), usage.AIFileLimitDaily
 }
 
-
-
 type AIAnalysisResponse struct {
 	SuggestedFolder string              `json:"suggested_folder"`
 	SuggestedName   string              `json:"suggested_name"`
@@ -283,7 +281,6 @@ func recordAIAction(userID string, fileID uint, action, description, folder, fil
 	})
 }
 
-
 // MetadataOnlySummary represents a condensed file analysis for batch clustering
 type MetadataOnlySummary struct {
 	FileName string              `json:"file_name"`
@@ -450,7 +447,7 @@ func processNewFile(sourcePath, fileName string, userID string, userAIConfig mod
 		} else {
 			log.Printf("🗑️ Original file removed: %s", sourcePath)
 		}
-		
+
 		// Update Metadata with final path
 		metadata.NASPath = finalDestPath
 		metadata.FileName = destFileName
@@ -458,8 +455,8 @@ func processNewFile(sourcePath, fileName string, userID string, userAIConfig mod
 
 		log.Printf("✅ Categorized and moved file to: %s", finalDestPath)
 		NotifyFileMoved(destFileName, selectedFolder, userID, aiResp.Summary, aiResp.ConfidenceScore)
-		
-		recordAIAction(userID, metadata.ID, "auto_organize", 
+
+		recordAIAction(userID, metadata.ID, "auto_organize",
 			fmt.Sprintf("Automatically organized '%s' into '%s'", fileName, selectedFolder),
 			selectedFolder, destFileName, sourcePath, true, aiResp.ConfidenceScore)
 	} else {
@@ -550,20 +547,20 @@ func triggerAIAnalysis(fileID uint, filePath string, fileName string, userID str
 	// Step 2: Poll for results
 	statusEndpoint := aiConfig.Endpoint("/api/analyze/status/" + jobID)
 	maxRetries := 60 // 60 * 5 seconds = 5 minutes
-	
+
 	for i := 0; i < maxRetries; i++ {
 		// Wait before polling
 		time.Sleep(5 * time.Second)
 
 		pollReq, _ := http.NewRequest("GET", statusEndpoint, nil)
 		pollReq.Header.Set("X-API-Key", aiConfig.APIKey)
-		
+
 		pollResp, err := client.Do(pollReq)
 		if err != nil {
 			log.Printf("⚠️ Polling error (retry %d/%d): %v", i+1, maxRetries, err)
 			continue
 		}
-		
+
 		if pollResp.StatusCode == http.StatusOK {
 			var raw map[string]interface{}
 			if err := json.NewDecoder(pollResp.Body).Decode(&raw); err == nil {
@@ -674,8 +671,11 @@ func ScanOrigin(userID string, customPath string, userPrompt string) (int, error
 
 	for _, f := range filesToProcess {
 		// Temporary metadata for AI context
-		meta := models.FileMetadata{OwnerID: userID, FileName: f.Name, NASPath: f.Path}
-		database.DB.Create(&meta)
+		var meta models.FileMetadata
+		if err := database.DB.Where("nas_path = ? AND owner_id = ?", f.Path, userID).First(&meta).Error; err != nil {
+			meta = models.FileMetadata{OwnerID: userID, FileName: f.Name, NASPath: f.Path}
+			database.DB.Create(&meta)
+		}
 
 		aiResp, err := triggerAIAnalysis(meta.ID, f.Path, f.Name, userID, existingFolders, folderProfiles, userAIConfig)
 		if err == nil {
@@ -730,19 +730,19 @@ func listExistingFolders(userID string, config models.UserAIConfig) []string {
 
 	destPath := filepath.Clean(config.DestinationPath)
 	var folders []string
-	
+
 	// Recursive scan with max depth 3
 	var scanDir func(string, int)
 	scanDir = func(currentPath string, depth int) {
 		if depth > 3 {
 			return
 		}
-		
+
 		entries, err := os.ReadDir(currentPath)
 		if err != nil {
 			return
 		}
-		
+
 		for _, entry := range entries {
 			if entry.IsDir() {
 				// Get path relative to destPath
@@ -755,7 +755,7 @@ func listExistingFolders(userID string, config models.UserAIConfig) []string {
 			}
 		}
 	}
-	
+
 	scanDir(destPath, 1)
 	return folders
 }
@@ -847,6 +847,15 @@ func ExecuteInPlaceMove(sourcePath, fileName, suggestedName, targetFolder, origi
 			meta.NASPath = destPath
 			meta.FileName = finalName
 			database.DB.Save(&meta)
+		} else {
+			// If not found, create it now
+			meta = models.FileMetadata{
+				NASPath:  destPath,
+				FileName: finalName,
+				OwnerID:  userID,
+				Status:   "organized",
+			}
+			database.DB.Create(&meta)
 		}
 		log.Printf("[Cleaner] Organized %s -> %s", finalName, targetFolder)
 

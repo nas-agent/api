@@ -34,9 +34,12 @@ func HandleAIActionReview(c *fiber.Ctx) error {
 	}
 
 	// 1. Fetch File Metadata
+	if logEntry.FileID == 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "log entry missing file reference (ID: 0)"})
+	}
 	var metadata models.FileMetadata
 	if err := database.DB.Where("id = ?", logEntry.FileID).First(&metadata).Error; err != nil {
-		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "file metadata not found"})
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "file metadata not found for ID " + fmt.Sprint(logEntry.FileID)})
 	}
 
 	currentPath := metadata.NASPath

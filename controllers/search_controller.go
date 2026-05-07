@@ -428,3 +428,20 @@ func SemanticSearch(c *fiber.Ctx) error {
 		"results":             finalResults,
 	})
 }
+
+func FindFileByPath(c *fiber.Ctx) error {
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
+	}
+
+	userID := GetUserID(c)
+	var file models.FileMetadata
+	if err := database.DB.Where("nas_path = ? AND owner_id = ?", req.Path, userID).First(&file).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "File not found in database"})
+	}
+
+	return c.JSON(file)
+}

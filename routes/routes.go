@@ -165,6 +165,9 @@ func SetupSetup(app *fiber.App) {
 	// Admin Reconciliation (Public for external triggers)
 	api.Post("/admin/reconcile", controllers.ReconcileSystem)
 	api.Get("/admin/reconcile", controllers.ReconcileSystem)
+	
+	// Public Share Link
+	app.Get("/s/:token", controllers.ServePublicFile)
 
 	// Protected Routes (Require Token)
 	protected := api.Group("/", JWTMiddleware())
@@ -205,6 +208,11 @@ func SetupSetup(app *fiber.App) {
 	protected.Post("/nas/groups/members", controllers.AddUserToGroup)
 	protected.Post("/nas/quotas", controllers.SetStorageQuota)
 	protected.Put("/nas/quotas/ai/:userId", controllers.UpdateAIQuota)
+
+	// Public Sharing Management
+	protected.Post("/shares/public", controllers.CreatePublicShare)
+	protected.Get("/shares/public", controllers.GetPublicShares)
+	protected.Delete("/shares/public/:token", controllers.DeletePublicShare)
 
 	// Phase 4B: Volume Health & Monitoring
 	protected.Get("/nas/volumes/:volumeId/health", controllers.GetVolumeHealth)
@@ -272,4 +280,5 @@ func SetupSetup(app *fiber.App) {
 
 	// Search
 	protected.Post("/search/semantic", controllers.SemanticSearch)
+	protected.Post("/search/by-path", controllers.FindFileByPath)
 }

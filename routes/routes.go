@@ -154,10 +154,6 @@ func SetupSetup(app *fiber.App) {
 	// Folder Browser Test (debug/diagnostic)
 	api.Post("/folders/test", controllers.TestFolderBrowser)
 
-	// SMB Configuration and Path Translation
-	api.Get("/smb-config", controllers.GetSMBConfig)
-	api.Post("/translate-path", controllers.TranslatePath)
-
 	// Public Users
 	api.Post("/users/register", controllers.Register)
 	api.Post("/users/login", controllers.Login)
@@ -281,4 +277,8 @@ func SetupSetup(app *fiber.App) {
 	// Search
 	protected.Post("/search/semantic", controllers.SemanticSearch)
 	protected.Post("/search/by-path", controllers.FindFileByPath)
+
+	// SMB Configuration and Path Translation
+	protected.Get("/smb-config", controllers.GetSMBConfig)
+	protected.Post("/translate-path", controllers.TranslatePath)
 }

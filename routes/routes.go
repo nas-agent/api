@@ -165,6 +165,9 @@ func SetupSetup(app *fiber.App) {
 	// Public Share Link
 	app.Get("/s/:token", controllers.ServePublicFile)
 
+	// Mobile Auth
+	api.Post("/mobile/exchange", controllers.ExchangeMobileToken)
+
 	// Protected Routes (Require Token)
 	protected := api.Group("/", JWTMiddleware())
 
@@ -281,4 +284,7 @@ func SetupSetup(app *fiber.App) {
 	// SMB Configuration and Path Translation
 	protected.Get("/smb-config", controllers.GetSMBConfig)
 	protected.Post("/translate-path", controllers.TranslatePath)
+
+	// Mobile Auth
+	protected.Post("/mobile/generate-token", controllers.GenerateMobileToken)
 }

@@ -59,6 +59,7 @@ func ConnectDB() {
 		&models.VolumeAlert{},
 		&models.CleanupPolicy{},
 		&models.PublicShare{},
+		&models.MobileAuthToken{},
 	)
 	if err != nil {
 		log.Fatal("Failed to auto-migrate database. \n", err)

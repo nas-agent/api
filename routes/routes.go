@@ -193,8 +193,9 @@ func SetupSetup(app *fiber.App) {
 	protected.Get("/system/security/blocked-ips", controllers.GetBlockedIPs)
 
 	// Share Management
-	protected.Get("/nas/shares", controllers.GetShares)
-	protected.Post("/nas/shares", controllers.CreateShare)
+	protected.Post("/folders", controllers.ListFolders)
+	protected.Post("/nas/browse", controllers.BrowseNAS)
+	protected.Post("/folders/create", controllers.CreateFolder)
 	protected.Get("/nas/shares/diagnostic/all", controllers.GetShareDiagnostics)
 	protected.Get("/nas/shares/:id/diagnostic", controllers.DiagnosticShare)
 	protected.Delete("/nas/shares/:id", controllers.DeleteShare)

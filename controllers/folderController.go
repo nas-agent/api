@@ -1,12 +1,15 @@
 package controllers
 
 import (
+	"api/database"
+	"api/models"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
@@ -147,6 +150,124 @@ func TestFolderBrowser(c *fiber.Ctx) error {
 		"folders":            folders,
 		"error":              errMsg,
 	})
+}
+
+// CreateFolder creates a new directory at the specified path.
+func CreateFolder(c *fiber.Ctx) error {
+	var req struct {
+		Path string `json:"path"`
+		Name string `json:"name"`
+	}
+
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
+	}
+
+	if req.Path == "" || req.Name == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Path and Name are required"})
+	}
+
+	fullPath := filepath.Join(req.Path, req.Name)
+
+	// Use sudo mkdir to create folder with permissions
+	cmd := exec.Command("sudo", "mkdir", "-p", fullPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		log.Printf("Error creating folder: %v (output: %s)", err, string(out))
+		return c.Status(500).JSON(fiber.Map{"error": fmt.Sprintf("Failed to create folder: %v", string(out))})
+	}
+
+	// Set permissions so the user can actually use it
+	exec.Command("sudo", "chmod", "777", fullPath).Run()
+
+	return c.JSON(fiber.Map{
+		"message": "Folder created successfully",
+		"path":    fullPath,
+	})
+}
+
+// BrowseNAS lists everything (files and folders) at the given path.
+// If path is "/" or empty, it returns the user's shares.
+func BrowseNAS(c *fiber.Ctx) error {
+	var req struct {
+		Path string `json:"path"`
+	}
+
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
+	}
+
+	path := strings.TrimSpace(req.Path)
+
+	// CASE 1: ROOT PATH - Return Shares
+	if path == "" || path == "/" {
+		var shares []models.Share
+		// Get shares from mounted volumes
+		database.DB.Joins("INNER JOIN volumes ON shares.volume_id = volumes.id").
+			Where("volumes.status = ?", "Mounted").
+			Find(&shares)
+
+		items := make([]FolderItem, 0)
+		for _, s := range shares {
+			items = append(items, FolderItem{
+				Name:  s.Name,
+				Path:  s.Path,
+				IsDir: true,
+			})
+		}
+		return c.JSON(fiber.Map{"items": items, "is_root": true})
+	}
+
+	// CASE 2: SPECIFIC PATH - Return Files and Folders
+	entries, err := readAllEntriesWithSudo(path)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	return c.JSON(fiber.Map{"items": entries, "is_root": false})
+}
+
+func readAllEntriesWithSudo(path string) ([]map[string]interface{}, error) {
+	absPath, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return nil, fmt.Errorf("invalid path")
+	}
+
+	// Use ls -p to mark directories with / and -F to mark types
+	cmd := exec.Command("sudo", "ls", "-1p", "--group-directories-first", absPath)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("cannot read directory")
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	items := make([]map[string]interface{}, 0)
+
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+
+		isDir := strings.HasSuffix(line, "/")
+		name := strings.TrimSuffix(line, "/")
+		fullPath := filepath.Join(absPath, name)
+
+		// Get size for files
+		var size int64 = 0
+		if !isDir {
+			sizeCmd := exec.Command("sudo", "stat", "-c", "%s", fullPath)
+			sizeOut, _ := sizeCmd.Output()
+			size, _ = strconv.ParseInt(strings.TrimSpace(string(sizeOut)), 10, 64)
+		}
+
+		items = append(items, map[string]interface{}{
+			"name":         name,
+			"path":         fullPath,
+			"is_directory": isDir,
+			"size_bytes":   size,
+		})
+	}
+
+	return items, nil
 }
 
 // readFolders is a fallback that reads directories without sudo (for testing/dev).

@@ -30,9 +30,13 @@ func JWTMiddleware() fiber.Handler {
 		// Fallback: Check token in query parameter (useful for direct file downloads)
 		if tokenStr == "" {
 			tokenStr = c.Query("token")
+			if tokenStr != "" {
+				fmt.Printf("[JWT] Token found in query parameter for path: %s\n", c.Path())
+			}
 		}
 
 		if tokenStr == "" {
+			fmt.Printf("[JWT] Missing token for path: %s (Header: %s, Query: %s)\n", c.Path(), authHeader, c.Query("token"))
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"message": "Missing token"})
 		}
 

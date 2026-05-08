@@ -209,6 +209,7 @@ func SetupSetup(app *fiber.App) {
 	protected.Post("/folders", controllers.ListFolders)
 	protected.Post("/nas/browse", controllers.BrowseNAS)
 	protected.Post("/folders/create", controllers.CreateFolder)
+	protected.Get("/files", controllers.GetFile)
 	protected.Get("/nas/shares/diagnostic/all", controllers.GetShareDiagnostics)
 	protected.Get("/nas/shares/:id/diagnostic", controllers.DiagnosticShare)
 	protected.Delete("/nas/shares/:id", controllers.DeleteShare)

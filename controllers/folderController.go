@@ -305,3 +305,37 @@ func readFolders(path string) ([]FolderItem, bool, error) {
 
 	return folders, false, nil
 }
+// GetFile serves a file for download or preview.
+func GetFile(c *fiber.Ctx) error {
+	path := c.Query("path")
+	if path == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Missing path"})
+	}
+
+	// Verify the path exists
+	// Note: We don't use sudo here because c.SendFile needs to read the file.
+	// The API process should have permission if it's in the sambashare group.
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return c.Status(404).JSON(fiber.Map{"error": "File not found"})
+		}
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	if info.IsDir() {
+		return c.Status(400).JSON(fiber.Map{"error": "Cannot download a directory"})
+	}
+
+	fileName := filepath.Base(path)
+	
+	// Determine if it should be shown inline (preview) or downloaded
+	disposition := "attachment"
+	ext := strings.ToLower(filepath.Ext(fileName))
+	if ext == ".pdf" || ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".gif" || ext == ".webp" {
+		disposition = "inline"
+	}
+
+	c.Set("Content-Disposition", fmt.Sprintf("%s; filename=\"%s\"", disposition, fileName))
+	return c.SendFile(path)
+}

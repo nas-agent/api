@@ -17,14 +17,23 @@ import (
 
 func JWTMiddleware() fiber.Handler {
 	return func(c *fiber.Ctx) error {
+		var tokenStr string
 		authHeader := c.Get("Authorization")
-		if authHeader == "" {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"message": "Missing token"})
+
+		if authHeader != "" {
+			parts := strings.Split(authHeader, "Bearer ")
+			if len(parts) >= 2 {
+				tokenStr = parts[1]
+			}
 		}
 
-		tokenString := strings.Split(authHeader, "Bearer ")
-		if len(tokenString) < 2 {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"message": "Invalid token format"})
+		// Fallback: Check token in query parameter (useful for direct file downloads)
+		if tokenStr == "" {
+			tokenStr = c.Query("token")
+		}
+
+		if tokenStr == "" {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"message": "Missing token"})
 		}
 
 		secret := os.Getenv("JWT_SECRET")
@@ -32,7 +41,7 @@ func JWTMiddleware() fiber.Handler {
 			secret = "fallback_secret_for_local_dev"
 		}
 
-		token, err := jwt.Parse(tokenString[1], func(token *jwt.Token) (interface{}, error) {
+		token, err := jwt.Parse(tokenStr, func(token *jwt.Token) (interface{}, error) {
 			return []byte(secret), nil
 		})
 

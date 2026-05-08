@@ -197,21 +197,24 @@ func BrowseNAS(c *fiber.Ctx) error {
 	}
 
 	path := strings.TrimSpace(req.Path)
+	userID := GetUserID(c)
 
 	// CASE 1: ROOT PATH - Return Shares
 	if path == "" || path == "/" {
 		var shares []models.Share
-		// Get shares from mounted volumes
+		// Filter: Only show Public shares OR Private shares owned by this user
 		database.DB.Joins("INNER JOIN volumes ON shares.volume_id = volumes.id").
-			Where("volumes.status = ?", "Mounted").
+			Where("volumes.status = ? AND (shares.type = ? OR shares.owner_id = ?)", 
+				"Mounted", models.ShareTypePublic, userID).
 			Find(&shares)
 
-		items := make([]FolderItem, 0)
+		items := make([]map[string]interface{}, 0)
 		for _, s := range shares {
-			items = append(items, FolderItem{
-				Name:  s.Name,
-				Path:  s.Path,
-				IsDir: true,
+			items = append(items, map[string]interface{}{
+				"name":         s.Name,
+				"path":         s.Path,
+				"is_directory": true,
+				"size_bytes":   0,
 			})
 		}
 		return c.JSON(fiber.Map{"items": items, "is_root": true})

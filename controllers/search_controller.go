@@ -115,7 +115,16 @@ func matchesFileType(file models.FileMetadata, requested *string) bool {
 }
 
 func buildFileCorpus(file models.FileMetadata, folderDesc string) string {
-	parts := []string{file.FileName, file.NASPath, file.Summary, file.FileType, folderDesc}
+	parts := []string{
+		file.FileName,
+		file.NASPath,
+		file.Summary,
+		file.SummaryTH,
+		file.Description,
+		file.DescriptionTH,
+		file.FileType,
+		folderDesc,
+	}
 	for _, tag := range file.Tags {
 		parts = append(parts, tag.TagName)
 	}

@@ -11,6 +11,9 @@ type FileMetadata struct {
 	LastAccessed  int64  `json:"last_accessed"`
 	OwnerID       string `gorm:"index" json:"owner_id"`
 	Summary       string `gorm:"type:text" json:"summary"`
+	SummaryTH     string `gorm:"type:text" json:"summary_th"`
+	Description   string `gorm:"type:text" json:"description"`
+	DescriptionTH string `gorm:"type:text" json:"description_th"`
 	Entities      string `gorm:"type:text" json:"entities"`
 	Status        string `json:"status"`
 

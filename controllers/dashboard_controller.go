@@ -182,11 +182,12 @@ func GetDashboardSummary(c *fiber.Ctx) error {
 	for _, entry := range history {
 		if entry.CreatedAt >= startOfDay.Unix() {
 			filesProcessedToday++
+			// Count moves only if they happened today
+			if entry.IsMove || entry.Action == "move_file" || entry.Action == "auto_organize" || entry.Action == "scan_organize" {
+				filesMovedToday++
+			}
 		}
-		if entry.Action == "move_file" {
-			filesMovedToday++
-		}
-		if entry.Action == "suggestion" {
+		if entry.Action == "suggestion" && entry.Status == "pending" {
 			pendingReview++
 		}
 		if confidence := parseConfidence(entry.Description); confidence != nil {

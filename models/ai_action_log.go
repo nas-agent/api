@@ -12,5 +12,6 @@ type AIActionLog struct {
 	IsMove       bool   `json:"is_move"`
 	Confidence   int    `json:"confidence"`
 	Status       string `gorm:"type:string;default:pending" json:"status"`
+	Insights     string `gorm:"type:text" json:"insights"` // JSON string containing thoughts, prompt, entities, etc.
 	CreatedAt    int64  `gorm:"autoCreateTime" json:"timestamp"`
 }

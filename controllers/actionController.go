@@ -5,6 +5,7 @@ import (
 	"api/models"
 	"api/services"
 	"fmt"
+	"strings"
 
 	"github.com/gofiber/fiber/v2"
 )
@@ -20,8 +21,12 @@ func GetHistory(c *fiber.Ctx) error {
 
 	type HistoryRow struct {
 		models.AIActionLog
-		FullPath string `json:"full_path"`
-		Summary  string `json:"summary"`
+		FullPath      string `json:"full_path"`
+		Summary       string `json:"summary"`
+		SummaryTH     string `json:"summary_th"`
+		Tags          string `json:"tags"`
+		Description   string `json:"description"`
+		DescriptionTH string `json:"description_th"`
 	}
 
 	fileIDs := make([]uint, 0, len(history))
@@ -31,14 +36,22 @@ func GetHistory(c *fiber.Ctx) error {
 		}
 	}
 
-	fileDataByFileID := map[uint]struct{ path, summary string }{}
+	fileDataByFileID := map[uint]struct{ path, summary, summaryTH, tags, description, descriptionTH string }{}
 	if len(fileIDs) > 0 {
 		var files []models.FileMetadata
-		database.DB.Select("id, nas_path, summary").Where("id IN ?", fileIDs).Find(&files)
+		database.DB.Preload("Tags").Where("id IN ?", fileIDs).Find(&files)
 		for _, file := range files {
-			fileDataByFileID[file.ID] = struct{ path, summary string }{
-				path:    file.NASPath,
-				summary: file.Summary,
+			tagNames := make([]string, 0, len(file.Tags))
+			for _, t := range file.Tags {
+				tagNames = append(tagNames, t.TagName)
+			}
+			fileDataByFileID[file.ID] = struct{ path, summary, summaryTH, tags, description, descriptionTH string }{
+				path:          file.NASPath,
+				summary:       file.Summary,
+				summaryTH:     file.SummaryTH,
+				tags:          strings.Join(tagNames, ","),
+				description:   file.Description,
+				descriptionTH: file.DescriptionTH,
 			}
 		}
 	}
@@ -54,9 +67,13 @@ func GetHistory(c *fiber.Ctx) error {
 		}
 
 		rows = append(rows, HistoryRow{
-			AIActionLog: h,
-			FullPath:    translatedPath,
-			Summary:     fData.summary,
+			AIActionLog:   h,
+			FullPath:      translatedPath,
+			Summary:       fData.summary,
+			SummaryTH:     fData.summaryTH,
+			Tags:          fData.tags,
+			Description:   fData.description,
+			DescriptionTH: fData.descriptionTH,
 		})
 	}
 

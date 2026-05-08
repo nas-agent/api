@@ -284,23 +284,40 @@ func SuggestPersonalizedFileName(userID string, originalFileName string, tags []
 	return newBase + ext
 }
 
-func updateFolderProfile(input DecisionEventInput) error {
-	folder := strings.TrimSpace(input.FinalFolder)
-	if folder == "" {
-		return nil
+// learningRate returns keyword weight deltas based on outcome type.
+// Corrections learn faster than passive auto-moves.
+func learningRate(outcome string) (positive float64, negative float64) {
+	switch outcome {
+	case "auto_moved":
+		return 0.05, 0.02
+	case "accepted":
+		return 0.10, 0.04
+	case "rejected", "changed_folder":
+		return 0.20, 0.15
+	default:
+		return 0.05, 0.02
+	}
+}
+
+// updateSingleFolderProfile updates keyword weights and accept/reject stats for one specific folder.
+func updateSingleFolderProfile(userID, folderName, outcome string, fileID uint, terms []string) {
+	if strings.TrimSpace(folderName) == "" {
+		return
 	}
 
 	var profile models.UserFolderProfile
-	database.DB.Where("user_id = ? AND folder_name = ?", input.UserID, folder).Limit(1).Find(&profile)
+	database.DB.Where("user_id = ? AND folder_name = ?", userID, folderName).Limit(1).Find(&profile)
 	if profile.ID == 0 {
-		profile = models.UserFolderProfile{UserID: input.UserID, FolderName: folder}
+		profile = models.UserFolderProfile{UserID: userID, FolderName: folderName}
 	}
 
-	accepted := input.Outcome == "accepted" || input.Outcome == "auto_moved"
-	if accepted {
+	posRate, negRate := learningRate(outcome)
+	isPositive := outcome == "accepted" || outcome == "auto_moved"
+
+	if isPositive {
 		profile.AcceptCount++
 		profile.LastUsedAt = time.Now().Unix()
-	} else if input.Outcome == "rejected" || input.ReasonCode == "changed_folder" {
+	} else {
 		profile.RejectCount++
 	}
 
@@ -309,12 +326,11 @@ func updateFolderProfile(input DecisionEventInput) error {
 		_ = json.Unmarshal([]byte(profile.KeywordWeights), &keywords)
 	}
 
-	terms := collectFileTerms(input.FileID)
 	for _, token := range terms {
-		if accepted {
-			keywords[token] += 0.08
+		if isPositive {
+			keywords[token] += posRate
 		} else {
-			keywords[token] -= 0.03
+			keywords[token] -= negRate
 		}
 		keywords[token] = clamp(keywords[token], -1, 1)
 	}
@@ -323,8 +339,8 @@ func updateFolderProfile(input DecisionEventInput) error {
 		profile.KeywordWeights = string(b)
 	}
 
-	if accepted {
-		vec := fetchFileVector(input.FileID)
+	if isPositive {
+		vec := fetchFileVector(fileID)
 		if len(vec) > 0 {
 			existing := parseFloatSlice(profile.CentroidVector)
 			if len(existing) == 0 {
@@ -342,9 +358,28 @@ func updateFolderProfile(input DecisionEventInput) error {
 	}
 
 	if profile.ID == 0 {
-		return database.DB.Create(&profile).Error
+		database.DB.Create(&profile)
+	} else {
+		database.DB.Save(&profile)
 	}
-	return database.DB.Save(&profile).Error
+}
+
+func updateFolderProfile(input DecisionEventInput) error {
+	terms := collectFileTerms(input.FileID)
+
+	// Always update the final folder (where file actually ended up)
+	updateSingleFolderProfile(input.UserID, input.FinalFolder, input.Outcome, input.FileID, terms)
+
+	// If this was a correction (suggested ≠ final), penalize the WRONG folder too.
+	// This dual-update makes wrong patterns decay quickly.
+	suggested := strings.TrimSpace(input.SuggestedFolder)
+	final := strings.TrimSpace(input.FinalFolder)
+	if (input.Outcome == "rejected" || input.ReasonCode == "changed_folder") &&
+		suggested != "" && !strings.EqualFold(suggested, final) {
+		updateSingleFolderProfile(input.UserID, suggested, "rejected", input.FileID, terms)
+	}
+
+	return nil
 }
 
 func updateNamingProfile(input DecisionEventInput) error {

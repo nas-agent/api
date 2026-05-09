@@ -442,46 +442,55 @@ func hardenDeviceCleanup(device string) error {
 		exec.Command("sudo", "swapoff", fmt.Sprintf("%sp%d", device, i)).Run() // Handle nvme/mmcblk
 	}
 
-	// 2. Identify and stop MD devices using this disk or its partitions
-	// Use lsblk to find all holders (RAID, LVM, etc.)
-	lsblkCmd := exec.Command("lsblk", "-n", "-o", "HOLDER", device)
+	// 2. Identify and stop ALL holders (RAID, LVM, etc.) using this disk or its partitions
+	// Use lsblk -J to get a reliable JSON structure of the device and its children
+	log.Printf("[NAS] Scanning for all device holders on %s...", device)
+	lsblkCmd := exec.Command("lsblk", "-J", "-o", "NAME,HOLDER,TYPE,MOUNTPOINT", device)
 	if output, err := lsblkCmd.CombinedOutput(); err == nil {
-		holders := strings.Split(string(output), "\n")
-		for _, holder := range holders {
-			holder = strings.TrimSpace(holder)
-			if holder == "" {
-				continue
-			}
-			if strings.HasPrefix(holder, "md") {
-				mdDev := "/dev/" + holder
-				log.Printf("[NAS] Stopping RAID holder %s", mdDev)
-				exec.Command("sudo", "mdadm", "--stop", mdDev).Run()
-			}
-			// Handle LVM holders (dm-X)
-			if strings.HasPrefix(holder, "dm-") {
-				log.Printf("[NAS] Attempting to remove device mapper holder %s", holder)
-				exec.Command("sudo", "dmsetup", "remove", "-f", holder).Run()
-			}
+		var data struct {
+			BlockDevices []struct {
+				Name       string `json:"name"`
+				Holder     string `json:"holder"`
+				Type       string `json:"type"`
+				Mountpoint string `json:"mountpoint"`
+				Children   []struct {
+					Name       string `json:"name"`
+					Holder     string `json:"holder"`
+					Type       string `json:"type"`
+					Mountpoint string `json:"mountpoint"`
+				} `json:"children"`
+			} `json:"blockdevices"`
 		}
-	}
 
-	// Also check partitions for holders
-	for i := 1; i <= 9; i++ {
-		p := fmt.Sprintf("%s%d", device, i)
-		if _, err := os.Stat(p); err != nil {
-			p = fmt.Sprintf("%sp%d", device, i) // Try p1, p2 for nvme
-		}
-		if _, err := os.Stat(p); err == nil {
-			lsblkCmd := exec.Command("lsblk", "-n", "-o", "HOLDER", p)
-			if output, err := lsblkCmd.CombinedOutput(); err == nil {
-				holders := strings.Split(string(output), "\n")
-				for _, holder := range holders {
-					holder = strings.TrimSpace(holder)
-					if holder != "" && strings.HasPrefix(holder, "md") {
-						mdDev := "/dev/" + holder
-						log.Printf("[NAS] Stopping RAID holder %s for partition %s", mdDev, p)
-						exec.Command("sudo", "mdadm", "--stop", mdDev).Run()
+		if err := json.Unmarshal(output, &data); err == nil {
+			for _, bd := range data.BlockDevices {
+				// Helper to process a device and its children
+				processDev := func(name, holder, mountpoint string) {
+					if mountpoint != "" {
+						log.Printf("[NAS] Unmounting %s (mounted at %s)", name, mountpoint)
+						exec.Command("sudo", "umount", "-l", "/dev/"+name).Run()
 					}
+					if holder != "" {
+						holders := strings.Split(holder, "\n")
+						for _, h := range holders {
+							h = strings.TrimSpace(h)
+							if h == "" {
+								continue
+							}
+							if strings.HasPrefix(h, "md") {
+								log.Printf("[NAS] Stopping RAID holder /dev/%s", h)
+								exec.Command("sudo", "mdadm", "--stop", "/dev/"+h).Run()
+							} else if strings.HasPrefix(h, "dm-") {
+								log.Printf("[NAS] Removing DM holder %s", h)
+								exec.Command("sudo", "dmsetup", "remove", "-f", h).Run()
+							}
+						}
+					}
+				}
+
+				processDev(bd.Name, bd.Holder, bd.Mountpoint)
+				for _, child := range bd.Children {
+					processDev(child.Name, child.Holder, child.Mountpoint)
 				}
 			}
 		}
@@ -490,9 +499,18 @@ func hardenDeviceCleanup(device string) error {
 	// 3. Clear RAID superblocks on the disk and ALL potential partitions
 	log.Printf("[NAS] Wiping RAID superblocks on %s and partitions...", device)
 	exec.Command("sudo", "mdadm", "--zero-superblock", "--force", device).Run()
-	for i := 1; i <= 9; i++ {
-		exec.Command("sudo", "mdadm", "--zero-superblock", "--force", fmt.Sprintf("%s%d", device, i)).Run()
-		exec.Command("sudo", "mdadm", "--zero-superblock", "--force", fmt.Sprintf("%sp%d", device, i)).Run()
+	// Use lsblk to find all actual partitions to wipe
+	pCmd := exec.Command("lsblk", "-n", "-o", "NAME", "-p", device)
+	if pOut, err := pCmd.CombinedOutput(); err == nil {
+		pLines := strings.Split(string(pOut), "\n")
+		for _, pLine := range pLines {
+			pLine = strings.TrimSpace(pLine)
+			if pLine != "" && pLine != device {
+				log.Printf("[NAS] Wiping RAID superblock on partition %s", pLine)
+				exec.Command("sudo", "mdadm", "--zero-superblock", "--force", pLine).Run()
+				exec.Command("sudo", "wipefs", "-a", "-f", pLine).Run()
+			}
+		}
 	}
 
 	// 4. LVM Cleanup: Deactivate any Volume Groups that might use this disk
@@ -501,8 +519,6 @@ func hardenDeviceCleanup(device string) error {
 	if output, err := pvscanCmd.CombinedOutput(); err == nil {
 		outStr := string(output)
 		if strings.Contains(outStr, device) {
-			// Try to find VG name in output
-			// Example: PV /dev/sda2   VG ubuntu-vg   lvm2 [118.35 GiB / 0    free]
 			lines := strings.Split(outStr, "\n")
 			for _, line := range lines {
 				if strings.Contains(line, device) {

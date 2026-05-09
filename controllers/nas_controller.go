@@ -550,11 +550,14 @@ func hardenDeviceCleanup(device string) error {
 	}
 
 	// 7. Refresh kernel and settle udev
-	exec.Command("sudo", "udevadm", "settle").Run()
+	log.Printf("[NAS] Finalizing cleanup: refreshing partition table and settling udev...")
+	exec.Command("sudo", "blockdev", "--rereadpt", device).Run()
 	exec.Command("sudo", "partprobe", device).Run()
+	exec.Command("sudo", "udevadm", "trigger").Run()
+	exec.Command("sudo", "udevadm", "settle").Run()
 	exec.Command("sudo", "sync").Run()
 
-	time.Sleep(2 * time.Second)
+	time.Sleep(3 * time.Second) // Let the kernel breathe
 	log.Printf("[NAS] NUCLEAR CLEANUP COMPLETE for: %s", device)
 
 	return nil

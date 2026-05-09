@@ -19,8 +19,8 @@ import (
 func GetCloudSyncConfig(c *fiber.Ctx) error {
 	userID := GetUserID(c)
 
-	const defaultClientID = "1030741694147-grh52s1r0mouutt86o15a7f0flgr1tj2.apps.googleusercontent.com"
-	const defaultClientSecret = "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"
+	const defaultClientID = "1030741694147-05krmd0k7qf1juhs7n6ush0hi66s7bmc.apps.googleusercontent.com"
+	const defaultClientSecret = "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"
 
 	var config models.CloudSyncConfig
 	if err := database.DB.Where("user_id = ?", userID).First(&config).Error; err != nil {
@@ -259,8 +259,18 @@ func getOAuthConfig(config models.CloudSyncConfig, c *fiber.Ctx) *oauth2.Config 
 	// Determine redirect URL
 	redirectURL := os.Getenv("GOOGLE_REDIRECT_URL")
 	if redirectURL == "" {
-		// Fallback to current host if not set
-		redirectURL = fmt.Sprintf("%s://%s/api/cloud/sync/callback", c.Protocol(), c.Hostname())
+		// Detect Cloudflare Tunnel URL or other proxy headers
+		host := c.Get("X-Forwarded-Host")
+		if host == "" {
+			host = c.Hostname()
+		}
+		
+		proto := c.Get("X-Forwarded-Proto")
+		if proto == "" {
+			proto = c.Protocol()
+		}
+
+		redirectURL = fmt.Sprintf("%s://%s/api/cloud/sync/callback", proto, host)
 	}
 
 	return &oauth2.Config{
@@ -276,8 +286,8 @@ func getOAuthConfig(config models.CloudSyncConfig, c *fiber.Ctx) *oauth2.Config 
 func GetGoogleAuthURL(c *fiber.Ctx) error {
 	userID := GetUserID(c)
 
-	const defaultClientID = "1030741694147-grh52s1r0mouutt86o15a7f0flgr1tj2.apps.googleusercontent.com"
-	const defaultClientSecret = "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"
+	const defaultClientID = "1030741694147-05krmd0k7qf1juhs7n6ush0hi66s7bmc.apps.googleusercontent.com"
+	const defaultClientSecret = "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"
 
 	var config models.CloudSyncConfig
 	if err := database.DB.Where("user_id = ?", userID).First(&config).Error; err != nil {
@@ -296,7 +306,12 @@ func GetGoogleAuthURL(c *fiber.Ctx) error {
 	oauthConfig := getOAuthConfig(config, c)
 	// state should include user ID so we know who is connecting
 	state := userID
-	url := oauthConfig.AuthCodeURL(state, oauth2.AccessTypeOffline, oauth2.ApprovalForce)
+	
+	url := oauthConfig.AuthCodeURL(
+		state, 
+		oauth2.AccessTypeOffline, 
+		oauth2.ApprovalForce,
+	)
 
 	return c.JSON(fiber.Map{"url": url})
 }
@@ -325,17 +340,33 @@ func GoogleAuthCallback(c *fiber.Ctx) error {
 	config.AccessToken = token.AccessToken
 	config.RefreshToken = token.RefreshToken
 	config.MockMode = false
-
-	// Get email from token info or API
-	// For simplicity, we can just save it.
-	// You might want to use the drive service here to verify.
-
 	database.DB.Save(&config)
 
-	// Redirect back to the UI
-	uiURL := os.Getenv("UI_BASE_URL")
-	if uiURL == "" {
-		uiURL = "/" // Default relative
-	}
-	return c.Redirect(uiURL + "/setting/cloud-sync?success=true")
+	// Return a beautiful success page
+	c.Set("Content-Type", "text/html")
+	return c.SendString(`
+		<!DOCTYPE html>
+		<html>
+		<head>
+			<title>NAS Agent - Cloud Sync Success</title>
+			<style>
+				body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #0f172a; color: white; text-align: center; }
+				.card { background: rgba(255,255,255,0.05); padding: 3rem; border-radius: 2rem; border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5); max-width: 400px; }
+				.icon { width: 80px; height: 80px; background: #22c55e; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 2rem; font-size: 40px; }
+				h1 { margin: 0 0 1rem; font-size: 1.5rem; }
+				p { color: #94a3b8; margin: 0 0 2rem; line-height: 1.6; }
+				.btn { background: #3b82f6; color: white; text-decoration: none; padding: 0.8rem 2rem; border-radius: 1rem; font-weight: bold; display: inline-block; transition: transform 0.2s; }
+				.btn:hover { transform: scale(1.05); }
+			</style>
+		</head>
+		<body>
+			<div class="card">
+				<div class="icon">✓</div>
+				<h1>Successfully Connected!</h1>
+				<p>Your Google Drive has been linked to your NAS. You can now close this window and return to the NAS Agent app.</p>
+				<button onclick="window.close()" class="btn">Close Window</button>
+			</div>
+		</body>
+		</html>
+	`)
 }

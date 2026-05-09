@@ -30,3 +30,8 @@ go.work
 .vscode/
 .idea/
 *.iml
+
+# Databases
+*.db
+*.sqlite
+data/

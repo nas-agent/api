@@ -16,7 +16,12 @@ func GetSettings(c *fiber.Ctx) error {
 	var setting models.UserSetting
 	// Use Limit(1).Find to avoid First()'s automatic "record not found" log
 	database.DB.Where("user_id = ?", userID).Limit(1).Find(&setting)
-	return c.JSON(setting)
+	
+	// Enrich with server's local IP for Smart QR codes
+	return c.JSON(fiber.Map{
+		"setting":  setting,
+		"local_ip": services.GetPreferredLocalIP(),
+	})
 }
 
 func UpdateSettings(c *fiber.Ctx) error {

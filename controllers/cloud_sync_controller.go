@@ -14,6 +14,8 @@ import (
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/drive/v3"
+	"google.golang.org/api/oauth2/v2"
+	"google.golang.org/api/option"
 )
 
 // GetCloudSyncConfig returns the current user's cloud sync configuration
@@ -346,6 +348,36 @@ func GoogleAuthCallback(c *fiber.Ctx) error {
 	config.AccessToken = token.AccessToken
 	config.RefreshToken = token.RefreshToken
 	config.MockMode = false
+
+	// Fetch user email using oauth2 service
+	oauthService, err := oauth2.NewService(context.Background(), option.WithTokenSource(oauthConfig.TokenSource(context.Background(), token)))
+	if err == nil {
+		userinfo, err := oauthService.Userinfo.Get().Do()
+		if err == nil {
+			config.DriveEmail = userinfo.Email
+		}
+	}
+
+	// Fetch or Create "NAS-Agent Backup" folder
+	driveService, err := drive.NewService(context.Background(), option.WithTokenSource(oauthConfig.TokenSource(context.Background(), token)))
+	if err == nil {
+		query := "name = 'NAS-Agent Backup' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+		fileList, err := driveService.Files.List().Q(query).Spaces("drive").Fields("files(id, name)").Do()
+		if err == nil && len(fileList.Files) > 0 {
+			config.DriveFolderID = fileList.Files[0].Id
+		} else {
+			// Create folder
+			folder := &drive.File{
+				Name:     "NAS-Agent Backup",
+				MimeType: "application/vnd.google-apps.folder",
+			}
+			newFolder, err := driveService.Files.Create(folder).Fields("id").Do()
+			if err == nil {
+				config.DriveFolderID = newFolder.Id
+			}
+		}
+	}
+
 	database.DB.Save(&config)
 
 	// Return a beautiful success page

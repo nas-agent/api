@@ -15,6 +15,7 @@ type CloudSyncConfig struct {
 	DriveFolderID string `json:"drive_folder_id"`                 // Root Drive folder ID for NAS backups
 	LastSyncAt    int64  `json:"last_sync_at"`
 	NextSyncAt    int64  `json:"next_sync_at"`
+	SyncTime      string `gorm:"default:'00:00'" json:"sync_time"` // "HH:MM" format
 	CreatedAt     int64  `gorm:"autoCreateTime" json:"created_at"`
 	UpdatedAt     int64  `gorm:"autoUpdateTime" json:"updated_at"`
 }

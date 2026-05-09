@@ -38,6 +38,7 @@ func GetCloudSyncConfig(c *fiber.Ctx) error {
 		"drive_folder_id": config.DriveFolderID,
 		"last_sync_at":   config.LastSyncAt,
 		"next_sync_at":   config.NextSyncAt,
+		"sync_time":      config.SyncTime,
 		"connected":      config.DriveEmail != "" || config.MockMode,
 	})
 }
@@ -53,6 +54,7 @@ func UpdateCloudSyncConfig(c *fiber.Ctx) error {
 		DriveEmail   string `json:"drive_email"`
 		ClientID     string `json:"client_id"`
 		ClientSecret string `json:"client_secret"`
+		SyncTime     string `json:"sync_time"`
 	}
 	if err := c.BodyParser(&input); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
@@ -83,6 +85,9 @@ func UpdateCloudSyncConfig(c *fiber.Ctx) error {
 	}
 	if input.ClientSecret != "" {
 		config.ClientSecret = input.ClientSecret
+	}
+	if input.SyncTime != "" {
+		config.SyncTime = input.SyncTime
 	}
 
 	// If enabling for the first time, set next sync

@@ -14,7 +14,7 @@ import (
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/drive/v3"
-	"google.golang.org/api/oauth2/v2"
+	googleoauth "google.golang.org/api/oauth2/v2"
 	"google.golang.org/api/option"
 )
 
@@ -350,7 +350,7 @@ func GoogleAuthCallback(c *fiber.Ctx) error {
 	config.MockMode = false
 
 	// Fetch user email using oauth2 service
-	oauthService, err := oauth2.NewService(context.Background(), option.WithTokenSource(oauthConfig.TokenSource(context.Background(), token)))
+	oauthService, err := googleoauth.NewService(context.Background(), option.WithTokenSource(oauthConfig.TokenSource(context.Background(), token)))
 	if err == nil {
 		userinfo, err := oauthService.Userinfo.Get().Do()
 		if err == nil {

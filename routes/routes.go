@@ -73,10 +73,17 @@ func RemoteAccessGuard() fiber.Handler {
 		}
 
 		var setting models.UserSetting
-		database.DB.Where("user_id = ?", userID).First(&setting)
+		if err := database.DB.Where("user_id = ?", userID).First(&setting).Error; err != nil {
+			// Create default settings if not found
+			setting = models.UserSetting{
+				UserID:               userID,
+				RemoteAccessEnabled: true, // Default to true so they can login first time
+			}
+			database.DB.Create(&setting)
+		}
 
 		// Detect if request is coming through a public tunnel (Cloudflare specific)
-		isRemote := c.Get("Cf-Ray") != ""
+		isRemote := c.Get("Cf-Ray") != "" || c.Get("X-Forwarded-Host") != ""
 
 		// If remote access is attempted but disabled in settings, block it
 		if isRemote && !setting.RemoteAccessEnabled {
@@ -242,6 +249,8 @@ func SetupSetup(app *fiber.App) {
 	protected.Get("/system/security/blocked-ips", controllers.GetBlockedIPs)
 
 	// Share Management
+	protected.Get("/nas/shares", controllers.GetShares)
+	protected.Post("/nas/shares", controllers.CreateShare)
 	protected.Post("/folders", controllers.ListFolders)
 	protected.Post("/nas/browse", controllers.BrowseNAS)
 	protected.Post("/folders/create", controllers.CreateFolder)

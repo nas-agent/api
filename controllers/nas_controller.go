@@ -437,55 +437,108 @@ func hardenDeviceCleanup(device string) error {
 
 	// 1. Disable swap if active
 	exec.Command("sudo", "swapoff", device).Run()
-	exec.Command("sudo", "swapoff", device+"1").Run()
-	exec.Command("sudo", "swapoff", device+"2").Run()
+	for i := 1; i <= 9; i++ {
+		exec.Command("sudo", "swapoff", fmt.Sprintf("%s%d", device, i)).Run()
+		exec.Command("sudo", "swapoff", fmt.Sprintf("%sp%d", device, i)).Run() // Handle nvme/mmcblk
+	}
 
-	// 2. Identify and stop MD devices using this disk
-	devName := filepath.Base(device) // e.g., "sda"
-
-	// CRITICAL: Wipe RAID superblocks first so the kernel releases its hold
-	log.Printf("[NAS] Wiping RAID superblocks on %s...", device)
-	exec.Command("sudo", "mdadm", "--zero-superblock", "--force", device).Run()
-	exec.Command("sudo", "mdadm", "--zero-superblock", "--force", device+"1").Run()
-
-	// Parse /proc/mdstat to find EXACT md devices using this disk
-	mdstat, _ := os.ReadFile("/proc/mdstat")
-	mdstatStr := string(mdstat)
-
-	// Example line: md127 : active raid1 sda1[0] sdb1[1]
-	// We look for "sda" in the line and extract the "mdX" part
-	lines := strings.Split(mdstatStr, "\n")
-	for _, line := range lines {
-		if strings.Contains(line, devName) {
-			parts := strings.Fields(line)
-			if len(parts) > 0 && strings.HasPrefix(parts[0], "md") {
-				mdDev := "/dev/" + parts[0]
-				log.Printf("[NAS] Stopping RAID device %s which is using %s", mdDev, device)
+	// 2. Identify and stop MD devices using this disk or its partitions
+	// Use lsblk to find all holders (RAID, LVM, etc.)
+	lsblkCmd := exec.Command("lsblk", "-n", "-o", "HOLDER", device)
+	if output, err := lsblkCmd.CombinedOutput(); err == nil {
+		holders := strings.Split(string(output), "\n")
+		for _, holder := range holders {
+			holder = strings.TrimSpace(holder)
+			if holder == "" {
+				continue
+			}
+			if strings.HasPrefix(holder, "md") {
+				mdDev := "/dev/" + holder
+				log.Printf("[NAS] Stopping RAID holder %s", mdDev)
 				exec.Command("sudo", "mdadm", "--stop", mdDev).Run()
-				time.Sleep(500 * time.Millisecond)
+			}
+			// Handle LVM holders (dm-X)
+			if strings.HasPrefix(holder, "dm-") {
+				log.Printf("[NAS] Attempting to remove device mapper holder %s", holder)
+				exec.Command("sudo", "dmsetup", "remove", "-f", holder).Run()
 			}
 		}
 	}
 
-	// 4. THE NUCLEAR OPTION: Wipe first 50MB and create new label
+	// Also check partitions for holders
+	for i := 1; i <= 9; i++ {
+		p := fmt.Sprintf("%s%d", device, i)
+		if _, err := os.Stat(p); err != nil {
+			p = fmt.Sprintf("%sp%d", device, i) // Try p1, p2 for nvme
+		}
+		if _, err := os.Stat(p); err == nil {
+			lsblkCmd := exec.Command("lsblk", "-n", "-o", "HOLDER", p)
+			if output, err := lsblkCmd.CombinedOutput(); err == nil {
+				holders := strings.Split(string(output), "\n")
+				for _, holder := range holders {
+					holder = strings.TrimSpace(holder)
+					if holder != "" && strings.HasPrefix(holder, "md") {
+						mdDev := "/dev/" + holder
+						log.Printf("[NAS] Stopping RAID holder %s for partition %s", mdDev, p)
+						exec.Command("sudo", "mdadm", "--stop", mdDev).Run()
+					}
+				}
+			}
+		}
+	}
+
+	// 3. Clear RAID superblocks on the disk and ALL potential partitions
+	log.Printf("[NAS] Wiping RAID superblocks on %s and partitions...", device)
+	exec.Command("sudo", "mdadm", "--zero-superblock", "--force", device).Run()
+	for i := 1; i <= 9; i++ {
+		exec.Command("sudo", "mdadm", "--zero-superblock", "--force", fmt.Sprintf("%s%d", device, i)).Run()
+		exec.Command("sudo", "mdadm", "--zero-superblock", "--force", fmt.Sprintf("%sp%d", device, i)).Run()
+	}
+
+	// 4. LVM Cleanup: Deactivate any Volume Groups that might use this disk
+	log.Printf("[NAS] Scanning for LVM Volume Groups on %s...", device)
+	pvscanCmd := exec.Command("sudo", "pvscan")
+	if output, err := pvscanCmd.CombinedOutput(); err == nil {
+		outStr := string(output)
+		if strings.Contains(outStr, device) {
+			// Try to find VG name in output
+			// Example: PV /dev/sda2   VG ubuntu-vg   lvm2 [118.35 GiB / 0    free]
+			lines := strings.Split(outStr, "\n")
+			for _, line := range lines {
+				if strings.Contains(line, device) {
+					fields := strings.Fields(line)
+					for j, field := range fields {
+						if field == "VG" && j+1 < len(fields) {
+							vgName := fields[j+1]
+							log.Printf("[NAS] Deactivating LVM VG: %s", vgName)
+							exec.Command("sudo", "vgchange", "-an", vgName).Run()
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// 5. THE NUCLEAR OPTION: Wipe structures
 	log.Printf("[NAS] Zapping all GPT/MBR structures on %s...", device)
 	exec.Command("sudo", "sgdisk", "--zap-all", device).Run()
 
-	log.Printf("[NAS] Force-creating new GPT label on %s...", device)
-	exec.Command("sudo", "parted", "-s", device, "mklabel", "gpt").Run()
-
 	log.Printf("[NAS] Wiping disk headers with dd...")
-	exec.Command("sudo", "dd", "if=/dev/zero", "of="+device, "bs=1M", "count=50", "conv=notrunc").Run()
+	exec.Command("sudo", "dd", "if=/dev/zero", "of="+device, "bs=1M", "count=100", "conv=notrunc").Run()
 
-	// 5. Clear signatures again
+	// 6. Clear signatures with wipefs on everything
 	exec.Command("sudo", "wipefs", "-a", "-f", device).Run()
+	for i := 1; i <= 9; i++ {
+		exec.Command("sudo", "wipefs", "-a", "-f", fmt.Sprintf("%s%d", device, i)).Run()
+		exec.Command("sudo", "wipefs", "-a", "-f", fmt.Sprintf("%sp%d", device, i)).Run()
+	}
 
-	// 6. Refresh kernel and settle udev
+	// 7. Refresh kernel and settle udev
 	exec.Command("sudo", "udevadm", "settle").Run()
 	exec.Command("sudo", "partprobe", device).Run()
 	exec.Command("sudo", "sync").Run()
 
-	time.Sleep(3 * time.Second) // Let the kernel breathe
+	time.Sleep(2 * time.Second)
 	log.Printf("[NAS] NUCLEAR CLEANUP COMPLETE for: %s", device)
 
 	return nil

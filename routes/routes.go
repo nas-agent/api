@@ -58,6 +58,39 @@ func JWTMiddleware() fiber.Handler {
 	}
 }
 
+func RemoteAccessGuard() fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		// Identify user from context (set by JWTMiddleware)
+		user := c.Locals("user")
+		if user == nil {
+			return c.Next()
+		}
+		token := user.(*jwt.Token)
+		claims := token.Claims.(jwt.MapClaims)
+		userID, ok := claims["user_id"].(string)
+		if !ok {
+			return c.Next()
+		}
+
+		var setting models.UserSetting
+		database.DB.Where("user_id = ?", userID).First(&setting)
+
+		// Detect if request is coming through a public tunnel (Cloudflare specific)
+		isRemote := c.Get("Cf-Ray") != ""
+
+		// If remote access is attempted but disabled in settings, block it
+		if isRemote && !setting.RemoteAccessEnabled {
+			fmt.Printf("[SECURITY] Blocking remote request for user %s (Remote Access Disabled in settings)\n", userID)
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+				"error":   "remote_access_disabled",
+				"message": "Remote access is disabled for this NAS. Please enable it in settings using your local desktop application.",
+			})
+		}
+
+		return c.Next()
+	}
+}
+
 func SetupSetup(app *fiber.App) {
 	api := app.Group("/api")
 
@@ -182,7 +215,7 @@ func SetupSetup(app *fiber.App) {
 	api.Post("/mobile/exchange", controllers.ExchangeMobileToken)
 
 	// Protected Routes (Require Token)
-	protected := api.Group("/", JWTMiddleware())
+	protected := api.Group("/", JWTMiddleware(), RemoteAccessGuard())
 
 	// NAS
 	protected.Get("/nas/storage/devices", controllers.GetStorageDevices)
@@ -302,4 +335,13 @@ func SetupSetup(app *fiber.App) {
 
 	// Mobile Auth
 	protected.Post("/mobile/generate-token", controllers.GenerateMobileToken)
+
+	// Cloud Sync (Google Drive)
+	protected.Get("/cloud/sync/config", controllers.GetCloudSyncConfig)
+	protected.Put("/cloud/sync/config", controllers.UpdateCloudSyncConfig)
+	protected.Post("/cloud/sync/trigger", controllers.TriggerCloudSync)
+	protected.Get("/cloud/sync/status", controllers.GetCloudSyncStatus)
+	protected.Get("/cloud/sync/logs", controllers.GetCloudSyncLogs)
+	protected.Post("/cloud/sync/connect-mock", controllers.ConnectMockGoogleAccount)
+	protected.Delete("/cloud/sync/disconnect", controllers.DisconnectGoogleAccount)
 }

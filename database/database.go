@@ -60,6 +60,10 @@ func ConnectDB() {
 		&models.CleanupPolicy{},
 		&models.PublicShare{},
 		&models.MobileAuthToken{},
+		// Cloud Sync
+		&models.CloudSyncConfig{},
+		&models.CloudSyncLog{},
+		&models.CloudSyncFile{},
 	)
 	if err != nil {
 		log.Fatal("Failed to auto-migrate database. \n", err)

@@ -417,6 +417,9 @@ func main() {
 	// Initialize File Watcher Service
 	services.InitFileWatcher()
 
+	// Start Cloud Sync Scheduler (checks for due syncs every 5 minutes)
+	services.StartCloudSyncScheduler()
+
 	// Start UDP Discovery Listener
 	startUDPDiscoveryListener()
 

@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"api/database"
 	"api/models"
 	"api/services"
 	"context"
@@ -18,6 +19,9 @@ import (
 func GetCloudSyncConfig(c *fiber.Ctx) error {
 	userID := GetUserID(c)
 
+	const defaultClientID = "1030741694147-grh52s1r0mouutt86o15a7f0flgr1tj2.apps.googleusercontent.com"
+	const defaultClientSecret = "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"
+
 	var config models.CloudSyncConfig
 	if err := database.DB.Where("user_id = ?", userID).First(&config).Error; err != nil {
 		// Return default config (not yet configured)
@@ -25,12 +29,22 @@ func GetCloudSyncConfig(c *fiber.Ctx) error {
 			"user_id":        userID,
 			"enabled":        false,
 			"schedule":       "daily",
-			"mock_mode":      true,
+			"mock_mode":      false,
 			"drive_email":    "",
 			"last_sync_at":   0,
 			"next_sync_at":   0,
 			"connected":      false,
+			"client_id":      defaultClientID,
+			"client_secret":  defaultClientSecret,
 		})
+	}
+
+	// Use hardcoded defaults if empty in DB
+	if config.ClientID == "" {
+		config.ClientID = defaultClientID
+	}
+	if config.ClientSecret == "" {
+		config.ClientSecret = defaultClientSecret
 	}
 
 	return c.JSON(fiber.Map{
@@ -262,9 +276,21 @@ func getOAuthConfig(config models.CloudSyncConfig, c *fiber.Ctx) *oauth2.Config 
 func GetGoogleAuthURL(c *fiber.Ctx) error {
 	userID := GetUserID(c)
 
+	const defaultClientID = "1030741694147-grh52s1r0mouutt86o15a7f0flgr1tj2.apps.googleusercontent.com"
+	const defaultClientSecret = "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"
+
 	var config models.CloudSyncConfig
-	if err := database.DB.Where("user_id = ?", userID).First(&config).Error; err != nil || config.ClientID == "" {
-		return c.Status(400).JSON(fiber.Map{"error": "Please configure Client ID and Client Secret first"})
+	if err := database.DB.Where("user_id = ?", userID).First(&config).Error; err != nil {
+		config.UserID = userID
+		config.ClientID = defaultClientID
+		config.ClientSecret = defaultClientSecret
+	}
+
+	if config.ClientID == "" {
+		config.ClientID = defaultClientID
+	}
+	if config.ClientSecret == "" {
+		config.ClientSecret = defaultClientSecret
 	}
 
 	oauthConfig := getOAuthConfig(config, c)

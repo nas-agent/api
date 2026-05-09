@@ -213,6 +213,9 @@ func SetupSetup(app *fiber.App) {
 
 	// Mobile Auth
 	api.Post("/mobile/exchange", controllers.ExchangeMobileToken)
+	
+	// Cloud Sync Callback (Public)
+	api.Get("/cloud/sync/callback", controllers.GoogleAuthCallback)
 
 	// Protected Routes (Require Token)
 	protected := api.Group("/", JWTMiddleware(), RemoteAccessGuard())
@@ -343,7 +346,6 @@ func SetupSetup(app *fiber.App) {
 	protected.Get("/cloud/sync/status", controllers.GetCloudSyncStatus)
 	protected.Get("/cloud/sync/logs", controllers.GetCloudSyncLogs)
 	protected.Get("/cloud/sync/auth-url", controllers.GetGoogleAuthURL)
-	api.Get("/cloud/sync/callback", controllers.GoogleAuthCallback)
 	protected.Post("/cloud/sync/connect-mock", controllers.ConnectMockGoogleAccount)
 	protected.Delete("/cloud/sync/disconnect", controllers.DisconnectGoogleAccount)
 }

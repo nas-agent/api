@@ -50,18 +50,40 @@ func GetCloudSyncConfig(c *fiber.Ctx) error {
 		config.ClientSecret = defaultClientSecret
 	}
 
+	var storageUsed, storageTotal int64
+	if config.AccessToken != "" {
+		// Fetch storage info from Google
+		oauthConfig := getOAuthConfig(config, c, "")
+		token := &oauth2.Token{
+			AccessToken:  config.AccessToken,
+			RefreshToken: config.RefreshToken,
+			Expiry:       time.Now().Add(-1 * time.Hour), // Force refresh if needed
+		}
+		
+		driveService, err := drive.NewService(context.Background(), option.WithTokenSource(oauthConfig.TokenSource(context.Background(), token)))
+		if err == nil {
+			about, err := driveService.About.Get().Fields("storageQuota").Do()
+			if err == nil {
+				storageUsed = about.StorageQuota.Usage
+				storageTotal = about.StorageQuota.Limit
+			}
+		}
+	}
+
 	return c.JSON(fiber.Map{
-		"id":              config.ID,
-		"user_id":         config.UserID,
-		"enabled":         config.Enabled,
-		"schedule":        config.Schedule,
-		"mock_mode":       config.MockMode,
-		"drive_email":     config.DriveEmail,
-		"drive_folder_id": config.DriveFolderID,
-		"last_sync_at":    config.LastSyncAt,
-		"next_sync_at":    config.NextSyncAt,
-		"sync_time":       config.SyncTime,
-		"connected":       config.DriveEmail != "" || config.MockMode,
+		"id":                  config.ID,
+		"user_id":             config.UserID,
+		"enabled":             config.Enabled,
+		"schedule":            config.Schedule,
+		"mock_mode":           config.MockMode,
+		"drive_email":         config.DriveEmail,
+		"drive_folder_id":     config.DriveFolderID,
+		"last_sync_at":        config.LastSyncAt,
+		"next_sync_at":        config.NextSyncAt,
+		"sync_time":           config.SyncTime,
+		"connected":           config.DriveEmail != "" || config.MockMode,
+		"drive_storage_used":  storageUsed,
+		"drive_storage_total": storageTotal,
 	})
 }
 

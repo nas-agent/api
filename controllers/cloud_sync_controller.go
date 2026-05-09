@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -26,16 +27,16 @@ func GetCloudSyncConfig(c *fiber.Ctx) error {
 	if err := database.DB.Where("user_id = ?", userID).First(&config).Error; err != nil {
 		// Return default config (not yet configured)
 		return c.JSON(fiber.Map{
-			"user_id":        userID,
-			"enabled":        false,
-			"schedule":       "daily",
-			"mock_mode":      false,
-			"drive_email":    "",
-			"last_sync_at":   0,
-			"next_sync_at":   0,
-			"connected":      false,
-			"client_id":      defaultClientID,
-			"client_secret":  defaultClientSecret,
+			"user_id":       userID,
+			"enabled":       false,
+			"schedule":      "daily",
+			"mock_mode":     false,
+			"drive_email":   "",
+			"last_sync_at":  0,
+			"next_sync_at":  0,
+			"connected":     false,
+			"client_id":     defaultClientID,
+			"client_secret": defaultClientSecret,
 		})
 	}
 
@@ -48,17 +49,17 @@ func GetCloudSyncConfig(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{
-		"id":             config.ID,
-		"user_id":        config.UserID,
-		"enabled":        config.Enabled,
-		"schedule":       config.Schedule,
-		"mock_mode":      config.MockMode,
-		"drive_email":    config.DriveEmail,
+		"id":              config.ID,
+		"user_id":         config.UserID,
+		"enabled":         config.Enabled,
+		"schedule":        config.Schedule,
+		"mock_mode":       config.MockMode,
+		"drive_email":     config.DriveEmail,
 		"drive_folder_id": config.DriveFolderID,
-		"last_sync_at":   config.LastSyncAt,
-		"next_sync_at":   config.NextSyncAt,
-		"sync_time":      config.SyncTime,
-		"connected":      config.DriveEmail != "" || config.MockMode,
+		"last_sync_at":    config.LastSyncAt,
+		"next_sync_at":    config.NextSyncAt,
+		"sync_time":       config.SyncTime,
+		"connected":       config.DriveEmail != "" || config.MockMode,
 	})
 }
 
@@ -243,34 +244,38 @@ func DisconnectGoogleAccount(c *fiber.Ctx) error {
 	userID := GetUserID(c)
 
 	database.DB.Model(&models.CloudSyncConfig{}).Where("user_id = ?", userID).Updates(map[string]interface{}{
-		"drive_email":    "",
-		"access_token":   "",
-		"refresh_token":  "",
+		"drive_email":     "",
+		"access_token":    "",
+		"refresh_token":   "",
 		"drive_folder_id": "",
-		"enabled":        false,
-		"next_sync_at":   0,
+		"enabled":         false,
+		"next_sync_at":    0,
 	})
 
 	return c.JSON(fiber.Map{"message": "Google account disconnected"})
 }
 
 // getOAuthConfig returns the oauth2.Config for Google Drive
-func getOAuthConfig(config models.CloudSyncConfig, c *fiber.Ctx) *oauth2.Config {
+func getOAuthConfig(config models.CloudSyncConfig, c *fiber.Ctx, redirectBase string) *oauth2.Config {
 	// Determine redirect URL
 	redirectURL := os.Getenv("GOOGLE_REDIRECT_URL")
 	if redirectURL == "" {
-		// Detect Cloudflare Tunnel URL or other proxy headers
-		host := c.Get("X-Forwarded-Host")
-		if host == "" {
-			host = c.Hostname()
-		}
-		
-		proto := c.Get("X-Forwarded-Proto")
-		if proto == "" {
-			proto = c.Protocol()
-		}
+		if redirectBase != "" {
+			redirectURL = fmt.Sprintf("%s/api/cloud/sync/callback", strings.TrimSuffix(redirectBase, "/"))
+		} else {
+			// Detect Cloudflare Tunnel URL or other proxy headers
+			host := c.Get("X-Forwarded-Host")
+			if host == "" {
+				host = c.Hostname()
+			}
 
-		redirectURL = fmt.Sprintf("%s://%s/api/cloud/sync/callback", proto, host)
+			proto := c.Get("X-Forwarded-Proto")
+			if proto == "" {
+				proto = c.Protocol()
+			}
+
+			redirectURL = fmt.Sprintf("%s://%s/api/cloud/sync/callback", proto, host)
+		}
 	}
 
 	return &oauth2.Config{
@@ -285,6 +290,7 @@ func getOAuthConfig(config models.CloudSyncConfig, c *fiber.Ctx) *oauth2.Config 
 // GetGoogleAuthURL returns the URL to start the OAuth flow
 func GetGoogleAuthURL(c *fiber.Ctx) error {
 	userID := GetUserID(c)
+	redirectBase := c.Query("redirect_base")
 
 	const defaultClientID = "1030741694147-05krmd0k7qf1juhs7n6ush0hi66s7bmc.apps.googleusercontent.com"
 	const defaultClientSecret = "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"
@@ -303,13 +309,13 @@ func GetGoogleAuthURL(c *fiber.Ctx) error {
 		config.ClientSecret = defaultClientSecret
 	}
 
-	oauthConfig := getOAuthConfig(config, c)
+	oauthConfig := getOAuthConfig(config, c, redirectBase)
 	// state should include user ID so we know who is connecting
 	state := userID
-	
+
 	url := oauthConfig.AuthCodeURL(
-		state, 
-		oauth2.AccessTypeOffline, 
+		state,
+		oauth2.AccessTypeOffline,
 		oauth2.ApprovalForce,
 	)
 
@@ -330,7 +336,7 @@ func GoogleAuthCallback(c *fiber.Ctx) error {
 		return c.Status(404).SendString("User configuration not found")
 	}
 
-	oauthConfig := getOAuthConfig(config, c)
+	oauthConfig := getOAuthConfig(config, c, "")
 	token, err := oauthConfig.Exchange(context.Background(), code)
 	if err != nil {
 		return c.Status(500).SendString("Failed to exchange token: " + err.Error())

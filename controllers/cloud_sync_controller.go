@@ -1,12 +1,17 @@
 package controllers
 
 import (
-	"api/database"
 	"api/models"
 	"api/services"
+	"context"
+	"fmt"
+	"os"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
+	"google.golang.org/api/drive/v3"
 )
 
 // GetCloudSyncConfig returns the current user's cloud sync configuration
@@ -233,4 +238,78 @@ func DisconnectGoogleAccount(c *fiber.Ctx) error {
 	})
 
 	return c.JSON(fiber.Map{"message": "Google account disconnected"})
+}
+
+// getOAuthConfig returns the oauth2.Config for Google Drive
+func getOAuthConfig(config models.CloudSyncConfig, c *fiber.Ctx) *oauth2.Config {
+	// Determine redirect URL
+	redirectURL := os.Getenv("GOOGLE_REDIRECT_URL")
+	if redirectURL == "" {
+		// Fallback to current host if not set
+		redirectURL = fmt.Sprintf("%s://%s/api/cloud/sync/callback", c.Protocol(), c.Hostname())
+	}
+
+	return &oauth2.Config{
+		ClientID:     config.ClientID,
+		ClientSecret: config.ClientSecret,
+		Endpoint:     google.Endpoint,
+		RedirectURL:  redirectURL,
+		Scopes:       []string{drive.DriveFileScope, "https://www.googleapis.com/auth/userinfo.email"},
+	}
+}
+
+// GetGoogleAuthURL returns the URL to start the OAuth flow
+func GetGoogleAuthURL(c *fiber.Ctx) error {
+	userID := GetUserID(c)
+
+	var config models.CloudSyncConfig
+	if err := database.DB.Where("user_id = ?", userID).First(&config).Error; err != nil || config.ClientID == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Please configure Client ID and Client Secret first"})
+	}
+
+	oauthConfig := getOAuthConfig(config, c)
+	// state should include user ID so we know who is connecting
+	state := userID
+	url := oauthConfig.AuthCodeURL(state, oauth2.AccessTypeOffline, oauth2.ApprovalForce)
+
+	return c.JSON(fiber.Map{"url": url})
+}
+
+// GoogleAuthCallback handles the redirect from Google
+func GoogleAuthCallback(c *fiber.Ctx) error {
+	code := c.Query("code")
+	state := c.Query("state") // state is our userID
+
+	if code == "" || state == "" {
+		return c.Status(400).SendString("Invalid callback parameters")
+	}
+
+	var config models.CloudSyncConfig
+	if err := database.DB.Where("user_id = ?", state).First(&config).Error; err != nil {
+		return c.Status(404).SendString("User configuration not found")
+	}
+
+	oauthConfig := getOAuthConfig(config, c)
+	token, err := oauthConfig.Exchange(context.Background(), code)
+	if err != nil {
+		return c.Status(500).SendString("Failed to exchange token: " + err.Error())
+	}
+
+	// Update config with tokens
+	config.AccessToken = token.AccessToken
+	config.RefreshToken = token.RefreshToken
+	config.MockMode = false
+
+	// Get email from token info or API
+	// For simplicity, we can just save it.
+	// You might want to use the drive service here to verify.
+
+	database.DB.Save(&config)
+
+	// Redirect back to the UI
+	uiURL := os.Getenv("UI_BASE_URL")
+	if uiURL == "" {
+		uiURL = "/" // Default relative
+	}
+	return c.Redirect(uiURL + "/setting/cloud-sync?success=true")
 }

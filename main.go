@@ -430,16 +430,23 @@ func main() {
 	// Initialize Fiber App
 	app := fiber.New()
 
-	// 🛡️ [CORS] Global Security Policy - MUST BE FIRST
-	app.Use(cors.New(cors.Config{
-		AllowOrigins:     "*",
-		AllowMethods:     "GET,POST,PUT,DELETE,OPTIONS,PATCH",
-		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, X-Requested-With, X-Mobile-Auth",
-		AllowCredentials: false,
-		MaxAge:           86400,
-	}))
+	// 🛡️ [CORS] Force-Injection Middleware - MUST BE FIRST
+	app.Use(func(c *fiber.Ctx) error {
+		// Set headers for EVERY request
+		c.Set("Access-Control-Allow-Origin", "*")
+		c.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, PATCH")
+		c.Set("Access-Control-Allow-Headers", "Origin, Content-Type, Accept, Authorization, X-Requested-With")
+		c.Set("X-CORS-Diagnostic", "Forced-By-Go-API")
 
-	// 🔍 [DIAGNOSTIC] Log every single request that hits the server
+		// Handle OPTIONS preflight immediately
+		if c.Method() == "OPTIONS" {
+			return c.SendStatus(204)
+		}
+
+		return c.Next()
+	})
+
+	// 🔍 [DIAGNOSTIC] Log every single request
 	app.Use(func(c *fiber.Ctx) error {
 		log.Printf("🌐 [NET] %s %s from %s (Origin: %s)", c.Method(), c.Path(), c.IP(), c.Get("Origin"))
 		return c.Next()

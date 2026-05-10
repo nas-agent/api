@@ -50,10 +50,14 @@ func GenerateMobileToken(c *fiber.Ctx) error {
 
 // ExchangeMobileToken exchanges a valid QR token for a standard JWT session
 func ExchangeMobileToken(c *fiber.Ctx) error {
-	token := c.Query("token")
+	// Try to get token from header first (bypasses Cloudflare URL scanning), fallback to query
+	token := c.Get("X-Mobile-Auth")
+	if token == "" {
+		token = c.Query("token")
+	}
 
 	if token == "" {
-		log.Printf("[MobileAuth] ❌ Missing token in query")
+		log.Printf("[MobileAuth] ❌ Missing token")
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Missing token"})
 	}
 

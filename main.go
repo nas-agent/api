@@ -430,6 +430,12 @@ func main() {
 	// Initialize Fiber App
 	app := fiber.New()
 
+	// 🔍 [DIAGNOSTIC] Log every single request that hits the server
+	app.Use(func(c *fiber.Ctx) error {
+		log.Printf("🌐 [NET] Incoming: %s %s from %s (Origin: %s)", c.Method(), c.Path(), c.IP(), c.Get("Origin"))
+		return c.Next()
+	})
+
 	// Middleware
 	app.Use(logger.New())
 	app.Use(cors.New(cors.Config{

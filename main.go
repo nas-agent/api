@@ -433,11 +433,11 @@ func main() {
 	// Middleware
 	app.Use(logger.New())
 	app.Use(cors.New(cors.Config{
-		AllowOrigins:     "*", // Frontend Dev Server Route
+		AllowOrigins:     "https://nasagent-mobile.faan.tech, https://nasagent-api.faan.tech",
 		AllowMethods:     "GET,POST,PUT,DELETE,OPTIONS,PATCH",
-		AllowHeaders:     "Origin, Content-Type, Accept, Authorization",
+		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, X-Requested-With",
 		ExposeHeaders:    "Content-Length, Content-Type",
-		AllowCredentials: false,
+		AllowCredentials: true,
 	}))
 
 	// Serve uploaded files statically

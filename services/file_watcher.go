@@ -189,15 +189,20 @@ func watchEventLoop() {
 
 				// 2. Avoid processing temporary or hidden files
 				fileName := filepath.Base(event.Name)
-				if strings.HasPrefix(fileName, ".") || strings.HasSuffix(fileName, ".tmp") || strings.HasSuffix(fileName, ".crdownload") {
+				lowerName := strings.ToLower(fileName)
+				if strings.HasPrefix(fileName, ".") || 
+				   strings.HasSuffix(lowerName, ".tmp") || 
+				   strings.HasSuffix(lowerName, ".crdownload") || 
+				   strings.HasSuffix(lowerName, ".part") || 
+				   strings.HasSuffix(lowerName, ".download") {
 					log.Printf("Skipping temporary/hidden file: %s", fileName)
 					continue
 				}
 
-				// 3. Debounce: If we already triggered this file in the last 2 seconds, skip
+				// 3. Debounce: If we already triggered this file in the last 3 seconds, skip
 				processingMu.Lock()
 				if lastTrigger, exists := processingFiles[event.Name]; exists {
-					if time.Since(lastTrigger) < 2*time.Second {
+					if time.Since(lastTrigger) < 3*time.Second {
 						processingMu.Unlock()
 						continue
 					}
@@ -205,8 +210,12 @@ func watchEventLoop() {
 				processingFiles[event.Name] = time.Now()
 				processingMu.Unlock()
 
-				// Small delay to ensure file is fully written if it was a large copy
-				time.Sleep(1 * time.Second)
+				// WAIT FOR STABILITY: Ensure file is fully written and unlocked
+				// Especially important for browser downloads
+				if !waitForFileReady(event.Name, 10) {
+					log.Printf("⚠️ File not ready after timeout, skipping: %s", event.Name)
+					continue
+				}
 
 				// 4. Find associated User ID
 				dir := filepath.Clean(filepath.Dir(event.Name))
@@ -986,4 +995,47 @@ func safeRemove(path string) error {
 		break
 	}
 	return lastErr
+}
+
+// waitForFileReady polls a file to check if it's no longer locked and has stopped changing size
+func waitForFileReady(path string, maxAttempts int) bool {
+	var lastSize int64 = -1
+	
+	for i := 0; i < maxAttempts; i++ {
+		fileInfo, err := os.Stat(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return false
+			}
+			time.Sleep(1 * time.Second)
+			continue
+		}
+
+		currentSize := fileInfo.Size()
+		
+		// If size is 0 and it's the first check, wait
+		if currentSize == 0 && i == 0 {
+			time.Sleep(1 * time.Second)
+			continue
+		}
+
+		// Try to open the file for reading (checks for locks)
+		f, err := os.OpenFile(path, os.O_RDONLY, 0)
+		if err == nil {
+			f.Close()
+			// If size hasn't changed since last check (and is > 0 or it's been a few checks)
+			if currentSize == lastSize && currentSize > 0 {
+				log.Printf("✅ File is ready: %s (%d bytes)", filepath.Base(path), currentSize)
+				return true
+			}
+		} else {
+			log.Printf("⏳ File still locked: %s (attempt %d/%d)", filepath.Base(path), i+1, maxAttempts)
+		}
+
+		lastSize = currentSize
+		time.Sleep(1500 * time.Millisecond) // Wait between checks
+	}
+	
+	// Final check: if it's openable but size changed, it might still be okay but let's be safe
+	return false
 }

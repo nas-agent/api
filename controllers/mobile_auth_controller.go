@@ -52,12 +52,17 @@ func GenerateMobileToken(c *fiber.Ctx) error {
 func ExchangeMobileToken(c *fiber.Ctx) error {
 	// Try to get token from header first (bypasses Cloudflare URL scanning), fallback to query
 	token := c.Get("X-Mobile-Auth")
-	if token == "" {
+	if token != "" {
+		log.Printf("[MobileAuth] 🔑 Received token from X-Mobile-Auth header")
+	} else {
 		token = c.Query("token")
+		if token != "" {
+			log.Printf("[MobileAuth] 🔑 Received token from Query Parameter")
+		}
 	}
 
 	if token == "" {
-		log.Printf("[MobileAuth] ❌ Missing token")
+		log.Printf("[MobileAuth] ❌ Missing token in request")
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Missing token"})
 	}
 

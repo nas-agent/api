@@ -60,7 +60,9 @@ func ExchangeMobileToken(c *fiber.Ctx) error {
 
 	var authToken models.MobileAuthToken
 	// Find the token
+	log.Printf("[MobileAuth] Attempting to exchange token: %s...", req.Token[:8])
 	if err := database.DB.Where("token = ?", req.Token).First(&authToken).Error; err != nil {
+		log.Printf("[MobileAuth] ❌ Token not found or database error: %v", err)
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid or expired token"})
 	}
 
@@ -69,14 +71,18 @@ func ExchangeMobileToken(c *fiber.Ctx) error {
 
 	// Check expiration
 	if time.Now().Unix() > authToken.ExpiresAt {
+		log.Printf("[MobileAuth] ❌ Token expired for user %s", authToken.UserID)
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Token has expired"})
 	}
 
 	// Find user
 	var user models.User
 	if err := database.DB.Where("id = ?", authToken.UserID).First(&user).Error; err != nil {
+		log.Printf("[MobileAuth] ❌ User %s not found in database", authToken.UserID)
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "User not found"})
 	}
+
+	log.Printf("[MobileAuth] ✓ Valid token for user: %s (%s)", user.Username, user.ID)
 
 	// Sign a dynamic JWT token (same logic as normal Login)
 	secret := os.Getenv("JWT_SECRET")

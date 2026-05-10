@@ -50,11 +50,36 @@ func GenerateMobileToken(c *fiber.Ctx) error {
 
 // ExchangeMobileToken exchanges a valid QR token for a standard JWT session
 func ExchangeMobileToken(c *fiber.Ctx) error {
-	// Try to get token from header first (bypasses Cloudflare URL scanning), fallback to query
-	token := c.Get("X-Mobile-Auth")
-	if token != "" {
-		log.Printf("[MobileAuth] 🔑 Received token from X-Mobile-Auth header")
-	} else {
+	// Priority 1: JSON body (POST - bypasses Cloudflare WAF body inspection)
+	var body struct {
+		Token string `json:"token"`
+	}
+	if err := c.BodyParser(&body); err == nil && body.Token != "" {
+		log.Printf("[MobileAuth] 🔑 Received token from POST JSON body")
+		// fall through with body.Token
+	}
+
+	token := body.Token
+
+	// Priority 2: Authorization Bearer header
+	if token == "" {
+		authHeader := c.Get("Authorization")
+		if len(authHeader) > 7 && authHeader[:7] == "Bearer " {
+			token = authHeader[7:]
+			log.Printf("[MobileAuth] 🔑 Received token from Authorization header")
+		}
+	}
+
+	// Priority 3: X-Mobile-Auth header
+	if token == "" {
+		token = c.Get("X-Mobile-Auth")
+		if token != "" {
+			log.Printf("[MobileAuth] 🔑 Received token from X-Mobile-Auth header")
+		}
+	}
+
+	// Priority 4: Query param (fallback)
+	if token == "" {
 		token = c.Query("token")
 		if token != "" {
 			log.Printf("[MobileAuth] 🔑 Received token from Query Parameter")

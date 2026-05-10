@@ -55,12 +55,18 @@ func ExchangeMobileToken(c *fiber.Ctx) error {
 	}
 
 	if err := c.BodyParser(&req); err != nil {
+		log.Printf("[MobileAuth] ❌ Failed to parse body: %v", err)
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+
+	if len(req.Token) < 8 {
+		log.Printf("[MobileAuth] ❌ Received invalid/too short token")
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid token format"})
 	}
 
 	var authToken models.MobileAuthToken
 	// Find the token
-	log.Printf("[MobileAuth] Attempting to exchange token: %s...", req.Token[:8])
+	log.Printf("[MobileAuth] Incoming Exchange Request. Token prefix: %s", req.Token[:8])
 	if err := database.DB.Where("token = ?", req.Token).First(&authToken).Error; err != nil {
 		log.Printf("[MobileAuth] ❌ Token not found or database error: %v", err)
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid or expired token"})

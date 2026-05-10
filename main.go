@@ -430,32 +430,23 @@ func main() {
 	// Initialize Fiber App
 	app := fiber.New()
 
-	// 🔍 [DIAGNOSTIC] Log every single request that hits the server
-	app.Use(func(c *fiber.Ctx) error {
-		// Manual Emergency CORS (to bypass any proxy/middleware issues)
-		c.Set("Access-Control-Allow-Origin", "*")
-		c.Set("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS,PATCH")
-		c.Set("Access-Control-Allow-Headers", "Origin, Content-Type, Accept, Authorization, X-Requested-With")
-		
-		log.Printf("🌐 [NET] Incoming: %s %s from %s (Origin: %s)", c.Method(), c.Path(), c.IP(), c.Get("Origin"))
-		
-		// Handle OPTIONS preflight manually for the exchange path just in case
-		if c.Method() == "OPTIONS" {
-			return c.SendStatus(204)
-		}
-		
-		return c.Next()
-	})
-
-	// Middleware
-	app.Use(logger.New())
+	// 🛡️ [CORS] Global Security Policy - MUST BE FIRST
 	app.Use(cors.New(cors.Config{
 		AllowOrigins:     "*",
 		AllowMethods:     "GET,POST,PUT,DELETE,OPTIONS,PATCH",
-		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, X-Requested-With",
-		ExposeHeaders:    "Content-Length, Content-Type",
-		AllowCredentials: false,
+		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, X-Requested-With, X-Mobile-Auth",
+		AllowCredentials: true,
+		MaxAge:           86400, // Cache preflight for 24 hours
 	}))
+
+	// 🔍 [DIAGNOSTIC] Log every single request that hits the server
+	app.Use(func(c *fiber.Ctx) error {
+		log.Printf("🌐 [NET] %s %s from %s (Origin: %s)", c.Method(), c.Path(), c.IP(), c.Get("Origin"))
+		return c.Next()
+	})
+
+	// Standard Logger
+	app.Use(logger.New())
 
 	// Serve uploaded files statically
 	app.Static("/uploads", "./data/uploads")

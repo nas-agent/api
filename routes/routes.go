@@ -27,6 +27,11 @@ func JWTMiddleware() fiber.Handler {
 			}
 		}
 
+		// Support for Proxy: Check X-Mobile-Auth header
+		if tokenStr == "" {
+			tokenStr = c.Get("X-Mobile-Auth")
+		}
+
 		// Fallback: Check token in query parameter (useful for direct file downloads)
 		if tokenStr == "" {
 			tokenStr = c.Query("token")

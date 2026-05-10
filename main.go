@@ -432,11 +432,11 @@ func main() {
 
 	// 🛡️ [CORS] Global Security Policy - MUST BE FIRST
 	app.Use(cors.New(cors.Config{
-		AllowOrigins:     "*",
+		AllowOrigins:     "https://nasagent-mobile.faan.tech, http://localhost:5173, http://localhost:5180, http://localhost:5174",
 		AllowMethods:     "GET,POST,PUT,DELETE,OPTIONS,PATCH",
 		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, X-Requested-With, X-Mobile-Auth",
-		AllowCredentials: true,
-		MaxAge:           86400, // Cache preflight for 24 hours
+		AllowCredentials: false,
+		MaxAge:           86400,
 	}))
 
 	// 🔍 [DIAGNOSTIC] Log every single request that hits the server

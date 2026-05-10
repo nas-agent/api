@@ -227,8 +227,9 @@ func SetupSetup(app *fiber.App) {
 	// Public Share Link
 	app.Get("/s/:token", controllers.ServePublicFile)
 
-	// Mobile Auth (Use GET to avoid CORS preflight issues in some mobile environments)
+	// Mobile Auth - support both GET (legacy) and POST (Cloudflare-safe)
 	api.Get("/mobile/exchange", controllers.ExchangeMobileToken)
+	api.Post("/mobile/exchange", controllers.ExchangeMobileToken)
 	
 	// Cloud Sync Callback (Public)
 	api.Get("/cloud/sync/callback", controllers.GoogleAuthCallback)

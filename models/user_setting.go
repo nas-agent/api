@@ -14,6 +14,6 @@ type UserSetting struct {
 	RemoteAccessEnabled bool      `gorm:"default:false" json:"remote_access_enabled"`
 	PublicDomain        string    `gorm:"type:text" json:"public_domain"`  // e.g. https://api.yournas.com
 	MobileAppURL        string    `gorm:"type:text" json:"mobile_app_url"` // e.g. https://nas-mobile.vercel.app
-	RegistryName        string    `gorm:"type:string;uniqueIndex" json:"registry_name"` // e.g. roodfaan-nas-01
+	RegistryName        *string    `gorm:"type:string;uniqueIndex" json:"registry_name"` // e.g. roodfaan-nas-01
 	UpdatedAt           time.Time `json:"updated_at"`
 }

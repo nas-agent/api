@@ -50,24 +50,22 @@ func GenerateMobileToken(c *fiber.Ctx) error {
 
 // ExchangeMobileToken exchanges a valid QR token for a standard JWT session
 func ExchangeMobileToken(c *fiber.Ctx) error {
-	var req struct {
-		Token string `json:"token"`
+	token := c.Query("token")
+
+	if token == "" {
+		log.Printf("[MobileAuth] ❌ Missing token in query")
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Missing token"})
 	}
 
-	if err := c.BodyParser(&req); err != nil {
-		log.Printf("[MobileAuth] ❌ Failed to parse body: %v", err)
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
-	}
-
-	if len(req.Token) < 8 {
+	if len(token) < 8 {
 		log.Printf("[MobileAuth] ❌ Received invalid/too short token")
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid token format"})
 	}
 
 	var authToken models.MobileAuthToken
 	// Find the token
-	log.Printf("[MobileAuth] Incoming Exchange Request. Token prefix: %s", req.Token[:8])
-	if err := database.DB.Where("token = ?", req.Token).First(&authToken).Error; err != nil {
+	log.Printf("[MobileAuth] Incoming GET Exchange Request. Token prefix: %s", token[:8])
+	if err := database.DB.Where("token = ?", token).First(&authToken).Error; err != nil {
 		log.Printf("[MobileAuth] ❌ Token not found or database error: %v", err)
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid or expired token"})
 	}

@@ -432,7 +432,18 @@ func main() {
 
 	// 🔍 [DIAGNOSTIC] Log every single request that hits the server
 	app.Use(func(c *fiber.Ctx) error {
+		// Manual Emergency CORS (to bypass any proxy/middleware issues)
+		c.Set("Access-Control-Allow-Origin", "*")
+		c.Set("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS,PATCH")
+		c.Set("Access-Control-Allow-Headers", "Origin, Content-Type, Accept, Authorization, X-Requested-With")
+		
 		log.Printf("🌐 [NET] Incoming: %s %s from %s (Origin: %s)", c.Method(), c.Path(), c.IP(), c.Get("Origin"))
+		
+		// Handle OPTIONS preflight manually for the exchange path just in case
+		if c.Method() == "OPTIONS" {
+			return c.SendStatus(204)
+		}
+		
 		return c.Next()
 	})
 

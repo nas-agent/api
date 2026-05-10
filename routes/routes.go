@@ -102,6 +102,14 @@ func SetupSetup(app *fiber.App) {
 	api := app.Group("/api")
 
 	api.Use(func(c *fiber.Ctx) error {
+		// Log all mobile exchange attempts immediately for debugging
+		if strings.Contains(c.Path(), "/api/mobile/exchange") {
+			fmt.Printf("📱 [DEBUG] Incoming Mobile Exchange: %s %s from %s\n", c.Method(), c.Path(), c.IP())
+		}
+		return c.Next()
+	})
+
+	api.Use(func(c *fiber.Ctx) error {
 		err := c.Next()
 
 		// Skip high-frequency polling/health checks

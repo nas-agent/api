@@ -204,11 +204,12 @@ func SetupSetup(app *fiber.App) {
 		return err
 	})
 
-	// Health check
+	// Health check (DIAGNOSTIC VERSION)
 	api.Get("/health", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{
-			"status": "ok",
+			"status": "I AM THE REAL PI",
 			"server": "go-fiber",
+			"time":   time.Now().Format(time.RFC3339),
 		})
 	})
 
